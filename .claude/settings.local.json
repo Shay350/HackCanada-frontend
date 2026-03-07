@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run build:ext)"
+      "Bash(npm run build:ext)",
+      "Bash(npm run build)",
+      "Bash(git remote set-url origin https://github.com/Shay350/HackCanada-frontend)",
+      "Bash(git push -u origin FrontEnd)"
     ]
   }
 }
