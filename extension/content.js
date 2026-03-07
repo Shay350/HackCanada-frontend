@@ -1,5 +1,7 @@
 const API_BASE = 'http://127.0.0.1:8000';
 const DOCTOR_PATH = '/admin/doctor';
+const HIDDEN_ATTR = 'data-doctor-hidden';
+const PREV_DISPLAY_ATTR = 'data-doctor-prev-display';
 
 // Grab the native pushState/replaceState BEFORE any SPA (Tailscale's React router)
 // can wrap them. Calling these directly bypasses the SPA router entirely so
@@ -7,7 +9,7 @@ const DOCTOR_PATH = '/admin/doctor';
 const nativePush    = History.prototype.pushState.bind(history);
 const nativeReplace = History.prototype.replaceState.bind(history);
 
-// ── iframe panel ─────────────────────────────────────────────────────────────
+// ── doctor view frame ────────────────────────────────────────────────────────
 
 const iframe = document.createElement('iframe');
 iframe.id = 'doctor-panel';
@@ -15,11 +17,8 @@ iframe.src = chrome.runtime.getURL('index.html')
   + '?embedded=true'
   + '&apiBase=' + encodeURIComponent(API_BASE);
 iframe.style.cssText = `
-  position: fixed;
-  left: 0;
-  width: 100vw;
+  width: 100%;
   border: none;
-  z-index: 9999;
   display: none;
   background: #111111;
 `;
@@ -42,6 +41,32 @@ function getNavBottom() {
 
 function isOnDoctorPage() {
   return window.location.pathname === DOCTOR_PATH;
+}
+
+function getMainContainer() {
+  return document.querySelector('main') || document.querySelector('[role="main"]');
+}
+
+function hideMainContent(main) {
+  if (!main) return;
+  for (const child of main.children) {
+    if (!(child instanceof HTMLElement) || child === iframe) continue;
+    if (!child.hasAttribute(HIDDEN_ATTR)) {
+      child.setAttribute(HIDDEN_ATTR, 'true');
+      child.setAttribute(PREV_DISPLAY_ATTR, child.style.display || '');
+    }
+    child.style.display = 'none';
+  }
+}
+
+function restoreMainContent() {
+  const hiddenNodes = document.querySelectorAll(`[${HIDDEN_ATTR}="true"]`);
+  hiddenNodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    node.style.display = node.getAttribute(PREV_DISPLAY_ATTR) || '';
+    node.removeAttribute(HIDDEN_ATTR);
+    node.removeAttribute(PREV_DISPLAY_ATTR);
+  });
 }
 
 // Walk up from an <a> to find the element sitting directly inside the tab bar
@@ -72,15 +97,19 @@ function findMachinesContainer() {
 
 function syncPanel() {
   if (isOnDoctorPage()) {
+    const main = getMainContainer();
     const bottom = getNavBottom();
-    iframe.style.top = bottom + 'px';
-    iframe.style.height = `calc(100vh - ${bottom}px)`;
+    const availableHeight = Math.max(window.innerHeight - bottom, 480);
+
+    if (main && iframe.parentElement !== main) {
+      main.appendChild(iframe);
+    }
+    hideMainContent(main);
+
+    iframe.style.width = main ? '100%' : '100vw';
+    iframe.style.height = `${availableHeight}px`;
     iframe.style.background = getPageBg();
     iframe.style.display = 'block';
-
-    // Hide the page's main content so only our panel shows
-    const main = document.querySelector('main') || document.querySelector('[role="main"]');
-    if (main) main.style.visibility = 'hidden';
 
     // Mark our tab active
     const tab = document.getElementById('doctor-tab');
@@ -93,9 +122,7 @@ function syncPanel() {
     }
   } else {
     iframe.style.display = 'none';
-
-    const main = document.querySelector('main') || document.querySelector('[role="main"]');
-    if (main) main.style.visibility = '';
+    restoreMainContent();
 
     const tab = document.getElementById('doctor-tab');
     if (tab) {
@@ -118,9 +145,14 @@ window.addEventListener('popstate', syncPanel);
 
 window.addEventListener('resize', () => {
   if (!isOnDoctorPage()) return;
+  const main = getMainContainer();
+  if (main && iframe.parentElement !== main) {
+    main.appendChild(iframe);
+  }
+  hideMainContent(main);
   const bottom = getNavBottom();
-  iframe.style.top = bottom + 'px';
-  iframe.style.height = `calc(100vh - ${bottom}px)`;
+  const availableHeight = Math.max(window.innerHeight - bottom, 480);
+  iframe.style.height = `${availableHeight}px`;
 });
 
 // ── Build & inject tab ───────────────────────────────────────────────────────
@@ -196,6 +228,9 @@ ensureTab();
 let debounceTimer = null;
 const observer = new MutationObserver(() => {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(ensureTab, 300);
+  debounceTimer = setTimeout(() => {
+    ensureTab();
+    syncPanel();
+  }, 300);
 });
 observer.observe(document.body, { childList: true, subtree: true });
