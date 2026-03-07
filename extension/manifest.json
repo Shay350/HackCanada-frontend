@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Self-Healing Metrics",
+  "version": "1.0",
+  "description": "AI-powered self-healing service metrics dashboard for Tailscale",
+  "content_scripts": [
+    {
+      "matches": ["https://login.tailscale.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["index.html", "assets/*", "vite.svg"],
+      "matches": ["https://login.tailscale.com/*"]
+    }
+  ]
+}

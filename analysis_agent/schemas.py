@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -95,6 +95,21 @@ class JobStatusResponse(BaseModel):
     error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProposedFixView(BaseModel):
+    description: str
+    steps: list[str]
+
+
+class IncidentView(BaseModel):
+    id: str
+    service: str
+    serviceType: str
+    status: Literal["online", "issue", "warning", "resolving"]
+    logs: list[str]
+    confidence: float = Field(ge=0, le=1)
+    proposedFix: ProposedFixView | None = None
 
 
 class Hypothesis(BaseModel):

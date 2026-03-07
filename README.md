@@ -1,25 +1,24 @@
-# HackCanada - Analysis Agent
+# HackCanada
 
-Read-only incident analysis backend for hackathon triage.
+Self-healing network/service dashboard with a React frontend and a FastAPI analysis backend.
 
-## What it does
+## Repo structure
 
-- Accepts incident context (`down`/`degraded`) from teammate pipeline.
-- Queues async analysis jobs in Postgres.
-- Retrieves relevant code snippets from allowlisted directories.
-- Calls Gemini to produce structured report JSON.
-- Falls back to deterministic rule-based report on Gemini errors/timeouts.
-- Exposes polling, summary, and JSON download endpoints.
+- `src/`: frontend dashboard (Vite + React + TypeScript)
+- `analysis_agent/`: backend incident analysis service (FastAPI + Postgres + Gemini)
+- `extension/`: built extension assets
 
-## Endpoints
+## Frontend (Vite)
 
-- `POST /api/v1/analysis/jobs`
-- `GET /api/v1/analysis/jobs/{job_id}`
-- `GET /api/v1/analysis/jobs/{job_id}/result`
-- `GET /api/v1/analysis/jobs/{job_id}/summary`
-- `GET /api/v1/analysis/jobs/{job_id}/download`
+```bash
+npm install
+npm run dev
+```
 
-## Local run
+Frontend expects backend API at `/api/*`.
+In local dev, Vite proxies `/api` to `http://127.0.0.1:8000`.
+
+## Backend (analysis agent)
 
 ```bash
 python3 -m venv .venv
@@ -29,9 +28,16 @@ cp .env.example .env
 uvicorn analysis_agent.main:app --reload
 ```
 
-## Expected intake JSON (Uptime Kuma style)
+### Core API endpoints
 
-The jobs endpoint expects this core shape:
+- `POST /api/v1/analysis/jobs`
+- `GET /api/v1/analysis/incidents`
+- `GET /api/v1/analysis/jobs/{job_id}`
+- `GET /api/v1/analysis/jobs/{job_id}/result`
+- `GET /api/v1/analysis/jobs/{job_id}/summary`
+- `GET /api/v1/analysis/jobs/{job_id}/download`
+
+### Intake JSON format (Uptime Kuma style)
 
 ```json
 {
@@ -43,9 +49,9 @@ The jobs endpoint expects this core shape:
 }
 ```
 
-`status` supports `DOWN/down` and `DEGRADED/degraded`.
+Supported statuses for triage: `DOWN/down`, `DEGRADED/degraded`.
 
-You can optionally include teammate-provided extracted log snippets around the timestamp:
+Optional teammate-provided extracted logs around the timestamp:
 
 ```json
 {
@@ -67,26 +73,8 @@ You can optionally include teammate-provided extracted log snippets around the t
 }
 ```
 
-## Example request
+## Safety constraints
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "monitor": "bluebubbles",
-    "status": "DOWN",
-    "msg": "Health check endpoint timed out",
-    "url": "https://example.com/health",
-    "time": "2026-03-07T01:30:00Z",
-    "log_snippets": [
-      {"timestamp": "2026-03-07T01:29:50Z", "source": "bluebubbles.log", "line": "connection refused to upstream"}
-    ],
-    "metadata": {"team": "ops", "device_or_node": "mac-mini-1"}
-  }'
-```
-
-## Notes
-
-- No command execution path is implemented.
-- Suggested commands are text-only output.
-- Read-only code retrieval is constrained to `ALLOWED_READ_ROOTS`.
+- No command execution path is implemented in backend.
+- Suggested commands are text-only guidance.
+- Code retrieval is read-only and constrained to allowlisted roots.

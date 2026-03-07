@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from analysis_agent.config import get_settings
 from analysis_agent.database import SessionLocal, engine, get_db
 from analysis_agent.models import AnalysisJob, AnalysisReport, Base, JobStatus
-from analysis_agent.schemas import JobCreatedResponse, JobStatusResponse, SummaryResponse, UptimeKumaJobCreate
+from analysis_agent.schemas import (
+    IncidentView,
+    JobCreatedResponse,
+    JobStatusResponse,
+    ProposedFixView,
+    SummaryResponse,
+    UptimeKumaJobCreate,
+)
 from analysis_agent.worker import AnalysisWorker
 
 settings = get_settings()
@@ -114,6 +121,45 @@ async def create_job(payload: UptimeKumaJobCreate, db: AsyncSession = Depends(ge
     return JobCreatedResponse(job_id=job.id, status=job.status.value)
 
 
+@app.get("/api/v1/analysis/incidents", response_model=list[IncidentView])
+async def list_incidents(limit: int = 50, db: AsyncSession = Depends(get_db)) -> list[IncidentView]:
+    safe_limit = min(max(limit, 1), 200)
+    stmt = (
+        select(AnalysisJob, AnalysisReport)
+        .outerjoin(AnalysisReport, AnalysisReport.job_id == AnalysisJob.id)
+        .order_by(AnalysisJob.created_at.desc())
+        .limit(safe_limit)
+    )
+    rows = await db.execute(stmt)
+
+    output: list[IncidentView] = []
+    for job, report in rows.all():
+        payload = job.request_payload or {}
+        report_json = (report.report_json if report else {}) or {}
+        metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+
+        service_name = str(payload.get("service_name", "unknown-service"))
+        uptime_status = str(payload.get("uptime_status", "")).lower()
+        ui_status = _map_job_to_ui_status(job.status, uptime_status)
+        logs = _extract_logs(payload, report_json)
+        confidence = float(report.confidence) if report else 0.0
+        proposed_fix = _extract_proposed_fix(report, report_json)
+
+        output.append(
+            IncidentView(
+                id=job.incident_id,
+                service=service_name,
+                serviceType=str(metadata.get("service_type", "service")),
+                status=ui_status,
+                logs=logs,
+                confidence=max(0.0, min(1.0, confidence)),
+                proposedFix=proposed_fix,
+            )
+        )
+
+    return output
+
+
 @app.get("/api/v1/analysis/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job(job_id: UUID, db: AsyncSession = Depends(get_db)) -> JobStatusResponse:
     result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
@@ -184,9 +230,58 @@ async def root() -> dict[str, Any]:
         "time": datetime.now(tz=timezone.utc).isoformat(),
         "endpoints": [
             "POST /api/v1/analysis/jobs",
+            "GET /api/v1/analysis/incidents",
             "GET /api/v1/analysis/jobs/{job_id}",
             "GET /api/v1/analysis/jobs/{job_id}/result",
             "GET /api/v1/analysis/jobs/{job_id}/summary",
             "GET /api/v1/analysis/jobs/{job_id}/download",
         ],
     }
+
+
+def _map_job_to_ui_status(job_status: JobStatus, uptime_status: str) -> str:
+    if job_status in {JobStatus.queued, JobStatus.running}:
+        return "resolving"
+    if job_status == JobStatus.failed:
+        return "warning"
+    if uptime_status == "degraded":
+        return "warning"
+    return "issue"
+
+
+def _extract_logs(payload: dict[str, Any], report_json: dict[str, Any]) -> list[str]:
+    evidence_items = report_json.get("evidence", [])
+    if isinstance(evidence_items, list) and evidence_items:
+        logs = [str(item.get("snippet", "")) for item in evidence_items if isinstance(item, dict)]
+        logs = [line for line in logs if line]
+        if logs:
+            return logs[:12]
+
+    raw_logs = payload.get("log_snippets", [])
+    if isinstance(raw_logs, list):
+        logs = [str(item.get("line", "")) for item in raw_logs if isinstance(item, dict)]
+        logs = [line for line in logs if line]
+        if logs:
+            return logs[:12]
+
+    description = str(payload.get("uptime_description", "No logs provided"))
+    return [description]
+
+
+def _extract_proposed_fix(report: AnalysisReport | None, report_json: dict[str, Any]) -> ProposedFixView | None:
+    if report is None:
+        return None
+
+    suggested_actions = report_json.get("suggested_actions", [])
+    if not isinstance(suggested_actions, list) or not suggested_actions:
+        return None
+
+    steps = [
+        str(item.get("suggested_command", "")).strip()
+        for item in suggested_actions
+        if isinstance(item, dict) and str(item.get("suggested_command", "")).strip()
+    ]
+    if not steps:
+        return None
+
+    return ProposedFixView(description=report.summary_text, steps=steps[:8])
