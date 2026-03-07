@@ -29,22 +29,59 @@ cp .env.example .env
 uvicorn analysis_agent.main:app --reload
 ```
 
+## Expected intake JSON (Uptime Kuma style)
+
+The jobs endpoint expects this core shape:
+
+```json
+{
+  "monitor": "test-service",
+  "status": "DOWN",
+  "msg": "connection refused",
+  "url": "https://example.com",
+  "time": "2026-03-07T12:00:00Z"
+}
+```
+
+`status` supports `DOWN/down` and `DEGRADED/degraded`.
+
+You can optionally include teammate-provided extracted log snippets around the timestamp:
+
+```json
+{
+  "monitor": "test-service",
+  "status": "DOWN",
+  "msg": "connection refused",
+  "url": "https://example.com",
+  "time": "2026-03-07T12:00:00Z",
+  "log_snippets": [
+    {
+      "timestamp": "2026-03-07T11:59:50Z",
+      "source": "service.log",
+      "line": "dial tcp 10.0.0.12:443: connect: connection refused"
+    }
+  ],
+  "metadata": {
+    "device_or_node": "mac-mini-1"
+  }
+}
+```
+
 ## Example request
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/analysis/jobs \
   -H 'Content-Type: application/json' \
   -d '{
-    "incident_id": "inc-001",
-    "service_name": "bluebubbles",
-    "device_or_node": "mac-mini-1",
-    "uptime_status": "down",
-    "uptime_description": "Health check endpoint timed out",
-    "detected_at": "2026-03-07T01:30:00Z",
+    "monitor": "bluebubbles",
+    "status": "DOWN",
+    "msg": "Health check endpoint timed out",
+    "url": "https://example.com/health",
+    "time": "2026-03-07T01:30:00Z",
     "log_snippets": [
       {"timestamp": "2026-03-07T01:29:50Z", "source": "bluebubbles.log", "line": "connection refused to upstream"}
     ],
-    "metadata": {"team": "ops"}
+    "metadata": {"team": "ops", "device_or_node": "mac-mini-1"}
   }'
 ```
 
