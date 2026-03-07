@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UptimeStatus(str, Enum):
@@ -29,6 +31,56 @@ class AnalysisJobCreate(BaseModel):
     log_snippets: list[LogSnippet] = Field(default_factory=list, max_length=1000)
     metadata: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class UptimeKumaJobCreate(BaseModel):
+    monitor: str = Field(min_length=1, max_length=200)
+    status: str = Field(min_length=1, max_length=40)
+    msg: str = Field(min_length=1, max_length=4000)
+    url: str = Field(min_length=1, max_length=2000)
+    time: datetime
+    log_snippets: list[LogSnippet] = Field(default_factory=list, max_length=1000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {UptimeStatus.down.value, UptimeStatus.degraded.value}:
+            raise ValueError("status must be DOWN/down or DEGRADED/degraded for triage jobs")
+        return normalized
+
+    def to_internal(self) -> AnalysisJobCreate:
+        node = (
+            self.metadata.get("device_or_node")
+            or self.metadata.get("node")
+            or self._node_from_url(self.url)
+            or "unknown-node"
+        )
+        incident_id = self._incident_id()
+        return AnalysisJobCreate(
+            incident_id=incident_id,
+            service_name=self.monitor,
+            device_or_node=str(node),
+            uptime_status=UptimeStatus(self.status),
+            uptime_description=self.msg,
+            detected_at=self.time,
+            log_snippets=self.log_snippets,
+            metadata=self.metadata,
+            idempotency_key=self.idempotency_key,
+        )
+
+    def _incident_id(self) -> str:
+        base = f"{self.monitor}|{self.time.isoformat()}|{self.status}"
+        digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+        slug = "".join(ch if ch.isalnum() else "-" for ch in self.monitor.lower()).strip("-")
+        slug = slug[:40] or "monitor"
+        return f"inc-{slug}-{digest}"
+
+    def _node_from_url(self, value: str) -> str | None:
+        parsed = urlparse(value)
+        return parsed.hostname
 
 
 class JobCreatedResponse(BaseModel):

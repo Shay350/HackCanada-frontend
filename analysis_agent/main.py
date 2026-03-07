@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from analysis_agent.config import get_settings
 from analysis_agent.database import SessionLocal, engine, get_db
 from analysis_agent.models import AnalysisJob, AnalysisReport, Base, JobStatus
-from analysis_agent.schemas import AnalysisJobCreate, JobCreatedResponse, JobStatusResponse, SummaryResponse
+from analysis_agent.schemas import JobCreatedResponse, JobStatusResponse, SummaryResponse, UptimeKumaJobCreate
 from analysis_agent.worker import AnalysisWorker
 
 settings = get_settings()
@@ -93,19 +93,20 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/api/v1/analysis/jobs", response_model=JobCreatedResponse)
-async def create_job(payload: AnalysisJobCreate, db: AsyncSession = Depends(get_db)) -> JobCreatedResponse:
-    if payload.idempotency_key:
-        existing = await db.execute(select(AnalysisJob).where(AnalysisJob.idempotency_key == payload.idempotency_key))
+async def create_job(payload: UptimeKumaJobCreate, db: AsyncSession = Depends(get_db)) -> JobCreatedResponse:
+    normalized = payload.to_internal()
+    if normalized.idempotency_key:
+        existing = await db.execute(select(AnalysisJob).where(AnalysisJob.idempotency_key == normalized.idempotency_key))
         existing_job = existing.scalar_one_or_none()
         if existing_job:
             return JobCreatedResponse(job_id=existing_job.id, status=existing_job.status.value)
 
     job = AnalysisJob(
-        incident_id=payload.incident_id,
-        idempotency_key=payload.idempotency_key,
+        incident_id=normalized.incident_id,
+        idempotency_key=normalized.idempotency_key,
         status=JobStatus.queued,
         progress=0,
-        request_payload=payload.model_dump(mode="json"),
+        request_payload=normalized.model_dump(mode="json"),
     )
     db.add(job)
     await db.commit()
