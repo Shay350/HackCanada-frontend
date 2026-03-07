@@ -3,6 +3,7 @@ import { Search, Filter, Download } from 'lucide-react';
 import IncidentCard from './IncidentCard';
 import ReviewModal from './ReviewModal';
 import { Incident } from '../lib/types';
+import { mockIncidents } from '../lib/mockData';
 
 const Dashboard = () => {
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
@@ -34,7 +35,7 @@ const Dashboard = () => {
         if (!active) {
           return;
         }
-        setIncidents([]);
+        setIncidents(mockIncidents);
         setLoadError(error instanceof Error ? error.message : 'Unable to load incidents');
       } finally {
         if (active) {

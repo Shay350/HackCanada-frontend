@@ -137,5 +137,10 @@ function ensureTab() {
 }
 
 ensureTab();
-const observer = new MutationObserver(ensureTab);
+
+let debounceTimer = null;
+const observer = new MutationObserver(() => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(ensureTab, 300);
+});
 observer.observe(document.body, { childList: true, subtree: true });
