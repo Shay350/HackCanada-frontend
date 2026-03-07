@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search, Filter, Download } from 'lucide-react';
 import IncidentCard from './IncidentCard';
-import { mockIncidents } from '../lib/mockData';
 import ReviewModal from './ReviewModal';
 import { Incident } from '../lib/types';
 
@@ -9,13 +8,19 @@ const Dashboard = () => {
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
+    const params = new URLSearchParams(window.location.search);
+    const apiBaseFromQuery = params.get('apiBase')?.trim() || '';
+    const apiBaseFromEnv = (import.meta.env.VITE_API_BASE_URL || '').trim();
+    const apiBase = apiBaseFromQuery || apiBaseFromEnv;
+    const incidentsEndpoint = `${apiBase}/api/v1/analysis/incidents`;
 
     const loadIncidents = async () => {
       try {
-        const response = await fetch('/api/v1/analysis/incidents');
+        const response = await fetch(incidentsEndpoint);
         if (!response.ok) {
           throw new Error(`Failed to load incidents: ${response.status}`);
         }
@@ -24,12 +29,13 @@ const Dashboard = () => {
           return;
         }
         setIncidents(data);
-      } catch {
+        setLoadError(null);
+      } catch (error) {
         if (!active) {
           return;
         }
-        // Keep dashboard usable during backend bring-up.
-        setIncidents(mockIncidents);
+        setIncidents([]);
+        setLoadError(error instanceof Error ? error.message : 'Unable to load incidents');
       } finally {
         if (active) {
           setLoading(false);
@@ -42,8 +48,6 @@ const Dashboard = () => {
       active = false;
     };
   }, []);
-
-  const displayedIncidents = incidents.length > 0 ? incidents : mockIncidents;
 
   // We are integrating our Self-Healing metrics inside a Tailscale-like dashboard page.
   // The layout follows the exact dark-mode image provided.
@@ -82,8 +86,14 @@ const Dashboard = () => {
       </div>
 
       <div style={{ display: 'inline-block', padding: '0.125rem 0.625rem', backgroundColor: 'rgba(255, 255, 255, 0.1)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', alignSelf: 'flex-start', marginBottom: '1rem' }}>
-        {loading ? 'Loading...' : `${displayedIncidents.length} services`}
+        {loading ? 'Loading...' : `${incidents.length} services`}
       </div>
+
+      {loadError && (
+        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', border: '1px solid rgba(239,68,68,0.45)', borderRadius: '0.5rem', color: '#FCA5A5', backgroundColor: 'rgba(127,29,29,0.3)', fontSize: '0.875rem' }}>
+          API connection issue: {loadError}
+        </div>
+      )}
 
       {/* Main Table Headers */}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(250px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) 40px', padding: '0 1rem 0.75rem 1rem', borderBottom: '1px solid var(--borderColor)', fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
@@ -96,14 +106,19 @@ const Dashboard = () => {
 
       {/* Main Content List */}
       <div className="flex-col">
-        {displayedIncidents.map((incident, index) => (
+        {incidents.map((incident, index) => (
           <IncidentCard
             key={incident.id}
             incident={incident}
             onReview={() => setSelectedIncident(incident)}
-            isLast={index === displayedIncidents.length - 1}
+            isLast={index === incidents.length - 1}
           />
         ))}
+        {!loading && incidents.length === 0 && (
+          <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>
+            No incidents found.
+          </div>
+        )}
       </div>
 
       {selectedIncident && (

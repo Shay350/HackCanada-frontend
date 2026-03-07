@@ -3,6 +3,12 @@
   "name": "Self-Healing Metrics",
   "version": "1.0",
   "description": "AI-powered self-healing service metrics dashboard for Tailscale",
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://127.0.0.1:8000/*",
+    "https://localhost:8000/*"
+  ],
   "content_scripts": [
     {
       "matches": ["https://login.tailscale.com/*"],

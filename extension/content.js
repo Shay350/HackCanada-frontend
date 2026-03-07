@@ -13,6 +13,7 @@ document.body.appendChild(iframe);
 
 let active = false;
 let ourTab = null;
+const backendApiBase = 'http://127.0.0.1:8000';
 
 function getPageBg() {
   const raw = getComputedStyle(document.body).backgroundColor;
@@ -77,7 +78,9 @@ function buildTab(templateTab) {
 
     if (active) {
       iframe.src = chrome.runtime.getURL('index.html')
-        + '?embedded=true&bg=' + encodeURIComponent(getPageBg());
+        + '?embedded=true'
+        + '&bg=' + encodeURIComponent(getPageBg())
+        + '&apiBase=' + encodeURIComponent(backendApiBase);
       positionIframe(templateTab);
       iframe.style.display = 'block';
       tab.setAttribute('aria-current', 'page');
