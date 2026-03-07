@@ -62,9 +62,36 @@ function restoreMainContent() {
   });
 }
 
+let navStealObserver = null;
+const stolenActive = new Set();
+
 function stealActiveFromNav() {
-  const activeTabs = document.querySelectorAll('a[href*="/admin/"][aria-current="page"]:not(#doctor-tab):not(#doctor-tab *)');
-  activeTabs.forEach(el => el.removeAttribute('aria-current'));
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+  nav.querySelectorAll('[aria-current="page"]').forEach(el => {
+    if (el.id === 'doctor-tab' || el.closest('#doctor-tab')) return;
+    el.removeAttribute('aria-current');
+    stolenActive.add(el);
+  });
+}
+
+function startNavStealing() {
+  stealActiveFromNav();
+  if (navStealObserver) navStealObserver.disconnect();
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+  navStealObserver = new MutationObserver(stealActiveFromNav);
+  navStealObserver.observe(nav, { attributes: true, attributeFilter: ['aria-current'], childList: true, subtree: true });
+}
+
+function stopNavStealing() {
+  if (navStealObserver) { navStealObserver.disconnect(); navStealObserver = null; }
+  stolenActive.forEach(el => {
+    if (document.contains(el)) el.setAttribute('aria-current', 'page');
+  });
+  stolenActive.clear();
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (nav) { nav.style.display = 'none'; nav.offsetHeight; nav.style.display = ''; }
 }
 
 function getTabContainer(a) {
@@ -119,62 +146,52 @@ function syncPanel() {
         + '&bg=' + encodeURIComponent(bg);
     }
 
-    // Remove aria-current from real tabs
-    stealActiveFromNav();
-    setTimeout(stealActiveFromNav, 50);
-
-    // Read active styling from a real tab BEFORE stealing aria-current
+    // Read active color BEFORE stealing so liveActive is still in the DOM
     const liveActive = document.querySelector('a[href*="/admin/"][aria-current="page"]:not(#doctor-tab):not(#doctor-tab *)');
     const activeColor = liveActive ? getComputedStyle(liveActive).color : '#3b82f6';
-    const activeClasses = liveActive ? Array.from(liveActive.classList) : [];
+
+    // Strip aria-current from all other nav tabs + watch for React re-adds
+    startNavStealing();
 
     const tab = document.getElementById('doctor-tab');
-
     if (tab) {
-
       const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
-
       if (innerA) {
-
-        innerA.setAttribute('aria-current', 'page');
-
-        if (activeClasses.length) {
-          innerA.dataset.doctorPrevClass = innerA.className;
-          activeClasses.forEach(cls => innerA.classList.add(cls));
-        }
-
         innerA.style.setProperty('color', activeColor, 'important');
+        innerA.querySelectorAll('*').forEach(el => el.style.setProperty('color', activeColor, 'important'));
       }
 
-      tab.style.setProperty('border-bottom', `2px solid ${activeColor}`, 'important');
-      tab.style.setProperty('box-sizing', 'border-box', 'important');
+      // Absolutely-positioned underline div matching Tailscale's style
+      let line = tab.querySelector('#doctor-underline');
+      if (!line) {
+        tab.style.position = 'relative';
+        line = document.createElement('div');
+        line.id = 'doctor-underline';
+        line.style.cssText = `
+          position: absolute; bottom: 0; left: 0; right: 0;
+          height: 2px; border-radius: 2px 2px 0 0;
+          pointer-events: none;
+        `;
+        tab.appendChild(line);
+      }
+      line.style.background = activeColor;
     }
 
   } else {
 
     iframe.style.display = 'none';
     restoreMainContent();
+    stopNavStealing();
 
     const tab = document.getElementById('doctor-tab');
-
     if (tab) {
-
       const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
-
       if (innerA) {
-
-        innerA.removeAttribute('aria-current');
-
-        if (innerA.dataset.doctorPrevClass !== undefined) {
-          innerA.className = innerA.dataset.doctorPrevClass;
-          delete innerA.dataset.doctorPrevClass;
-        }
-
         innerA.style.removeProperty('color');
+        innerA.querySelectorAll('*').forEach(el => el.style.removeProperty('color'));
       }
-
-      tab.style.removeProperty('border-bottom');
-      tab.style.removeProperty('box-sizing');
+      const line = tab.querySelector('#doctor-underline');
+      if (line) line.remove();
     }
   }
 }
@@ -211,6 +228,7 @@ function buildTab(templateContainer) {
 
   tab.id = 'doctor-tab';
   tab.style.cursor = 'pointer';
+  tab.style.marginLeft = '1rem';
 
   tab.removeAttribute('aria-current');
   tab.querySelectorAll('[aria-current]').forEach(el => el.removeAttribute('aria-current'));
