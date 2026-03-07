@@ -1,0 +1,13 @@
+service_id: generic-service
+match_rules:
+  - contains: "generic"
+triage_checks:
+  - name: process-health
+    description: "Inspect process and dependency health around incident"
+evidence_collectors:
+  - source: app.log
+    strategy: timestamp-window
+suggestion_templates:
+  - title: Verify service health
+    suggested_command: "check_service_health --service {{service_name}}"
+    safety_note: "Suggestion only. Do not execute automatically."
