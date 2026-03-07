@@ -11,7 +11,10 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://login.tailscale.com/*"],
+      "matches": [
+        "https://tailscale.com/*",
+        "https://*.tailscale.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -19,7 +22,10 @@
   "web_accessible_resources": [
     {
       "resources": ["index.html", "assets/*", "vite.svg"],
-      "matches": ["https://login.tailscale.com/*"]
+      "matches": [
+        "https://tailscale.com/*",
+        "https://*.tailscale.com/*"
+      ]
     }
   ]
 }

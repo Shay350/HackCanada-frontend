@@ -1,3 +1,7 @@
+const TAB_ID = 'server-monitor-tab';
+const TAB_LABEL = 'Server Monitor';
+const backendApiBase = 'http://127.0.0.1:8000';
+
 const iframe = document.createElement('iframe');
 iframe.id = 'self-healing-panel';
 iframe.style.cssText = `
@@ -12,43 +16,94 @@ iframe.style.cssText = `
 document.body.appendChild(iframe);
 
 let active = false;
-let ourTab = null;
-const backendApiBase = 'http://127.0.0.1:8000';
+
+function normalizeText(value) {
+  return (value || '').trim().toLowerCase();
+}
 
 function getPageBg() {
   const raw = getComputedStyle(document.body).backgroundColor;
   const m = raw.match(/\d+/g);
   if (m && m.length >= 3) {
-    return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+    return '#'
+      + m
+        .slice(0, 3)
+        .map((n) => (+n).toString(16).padStart(2, '0'))
+        .join('');
   }
   return '#111111';
 }
 
+function getNavLinks() {
+  const scoped = [
+    ...document.querySelectorAll('nav a[href], [role="navigation"] a[href]'),
+  ];
+
+  if (scoped.length > 0) {
+    return scoped;
+  }
+
+  return [...document.querySelectorAll('a[href]')].filter((anchor) => {
+    const href = normalizeText(anchor.getAttribute('href'));
+    return href.includes('admin') || href.includes('machines') || href.includes('settings');
+  });
+}
+
+function findSettingsTab() {
+  return getNavLinks().find((anchor) => {
+    const href = normalizeText(anchor.getAttribute('href'));
+    const text = normalizeText(anchor.textContent);
+    return href.includes('/admin/settings') || href.includes('/settings') || text === 'settings';
+  }) || null;
+}
+
+function findTemplateTab() {
+  return getNavLinks().find((anchor) => {
+    const href = normalizeText(anchor.getAttribute('href'));
+    const text = normalizeText(anchor.textContent);
+    return href.includes('/admin/machines')
+      || href.includes('/machines')
+      || text === 'machines'
+      || text === 'devices';
+  }) || getNavLinks()[0] || null;
+}
+
 function positionIframe(refEl) {
-  const nav = refEl.closest('nav') || refEl.parentElement;
+  const nav = refEl.closest('nav')
+    || refEl.closest('[role="navigation"]')
+    || refEl.parentElement;
+
+  if (!nav) {
+    iframe.style.top = '0';
+    iframe.style.height = '100vh';
+    return;
+  }
+
   const bottom = nav.getBoundingClientRect().bottom;
-  iframe.style.top = bottom + 'px';
+  iframe.style.top = `${bottom}px`;
   iframe.style.height = `calc(100vh - ${bottom}px)`;
   iframe.style.background = getPageBg();
 }
 
-function findSettingsTab() {
-  return document.querySelector('a[href*="/admin/settings"]')
-    || [...document.querySelectorAll('a[href*="/admin/"]')].find(a =>
-        a.textContent.trim().toLowerCase() === 'settings'
-      );
-}
+function setTabLabel(tab) {
+  const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    if (walker.currentNode.textContent.trim()) {
+      walker.currentNode.textContent = TAB_LABEL;
+      return;
+    }
+  }
 
-function findMachinesTab() {
-  return document.querySelector('a[href*="/admin/machines"]')
-    || [...document.querySelectorAll('a[href*="/admin/"]')][0];
+  const label = document.createElement('span');
+  label.textContent = TAB_LABEL;
+  tab.appendChild(label);
 }
 
 function buildTab(templateTab) {
   const tab = templateTab.cloneNode(true);
   tab.removeAttribute('href');
   tab.removeAttribute('aria-current');
-  tab.id = 'server-monitor-tab';
+  tab.id = TAB_ID;
   tab.style.cursor = 'pointer';
 
   const svgEl = tab.querySelector('svg');
@@ -63,13 +118,7 @@ function buildTab(templateTab) {
     `;
   }
 
-  const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    if (walker.currentNode.textContent.trim()) {
-      walker.currentNode.textContent = 'ServerMonitor';
-      break;
-    }
-  }
+  setTabLabel(tab);
 
   tab.addEventListener('click', (e) => {
     e.preventDefault();
@@ -77,27 +126,29 @@ function buildTab(templateTab) {
     active = !active;
 
     if (active) {
-      iframe.src = chrome.runtime.getURL('index.html')
-        + '?embedded=true'
-        + '&bg=' + encodeURIComponent(getPageBg())
-        + '&apiBase=' + encodeURIComponent(backendApiBase);
-      positionIframe(templateTab);
+      iframe.src = `${chrome.runtime.getURL('index.html')}?embedded=true&bg=${encodeURIComponent(getPageBg())}&apiBase=${encodeURIComponent(backendApiBase)}`;
+      positionIframe(tab);
       iframe.style.display = 'block';
       tab.setAttribute('aria-current', 'page');
-      const liveActive = document.querySelector('a[href*="/admin/"][aria-current="page"]');
+
+      const liveActive = document.querySelector('a[aria-current="page"]');
       const activeColor = liveActive ? getComputedStyle(liveActive).color : '#60a5fa';
       tab.style.setProperty('color', activeColor, 'important');
-    } else {
-      iframe.style.display = 'none';
-      tab.removeAttribute('aria-current');
-      tab.style.removeProperty('color');
+      return;
     }
+
+    iframe.style.display = 'none';
+    tab.removeAttribute('aria-current');
+    tab.style.removeProperty('color');
   });
 
   document.addEventListener('click', (e) => {
-    if (!active) return;
-    const clicked = e.target.closest('a[href*="/admin/"]');
-    if (clicked && clicked.id !== 'server-monitor-tab') {
+    if (!active || !(e.target instanceof Element)) {
+      return;
+    }
+
+    const clicked = e.target.closest('nav a[href], [role="navigation"] a[href]');
+    if (clicked && clicked.id !== TAB_ID) {
       active = false;
       iframe.style.display = 'none';
       tab.removeAttribute('aria-current');
@@ -106,34 +157,34 @@ function buildTab(templateTab) {
   });
 
   window.addEventListener('resize', () => {
-    if (active) positionIframe(templateTab);
+    if (active) {
+      positionIframe(tab);
+    }
   });
 
   return tab;
 }
 
 function ensureTab() {
-  const settingsTab = findSettingsTab();
-  if (!settingsTab) return;
+  const anchorTab = findSettingsTab() || findTemplateTab();
+  const templateTab = findTemplateTab();
 
-  const existingTab = document.getElementById('server-monitor-tab');
-
-  // Already in the right spot — directly after Settings
-  if (existingTab && settingsTab.nextElementSibling === existingTab) return;
-
-  // Exists but drifted — move it back right after Settings
-  if (existingTab) {
-    settingsTab.insertAdjacentElement('afterend', existingTab);
+  if (!anchorTab || !templateTab) {
     return;
   }
 
-  // Doesn't exist yet — build and insert
-  const templateTab = findMachinesTab();
-  if (!templateTab) return;
+  const existingTab = document.getElementById(TAB_ID);
 
-  ourTab = buildTab(templateTab);
-  settingsTab.insertAdjacentElement('afterend', ourTab);
-  console.log('[ServerMonitor] tab injected ✓');
+  if (existingTab) {
+    if (anchorTab.nextElementSibling !== existingTab) {
+      anchorTab.insertAdjacentElement('afterend', existingTab);
+    }
+    return;
+  }
+
+  const tab = buildTab(templateTab);
+  anchorTab.insertAdjacentElement('afterend', tab);
+  console.log('[ServerMonitor] tab injected');
 }
 
 ensureTab();
