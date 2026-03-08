@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -285,19 +286,24 @@ def _extract_proposed_fix(
     if report is None:
         return None
 
+    summary = _select_summary_text(report.summary_text, report_json, service_name)
     suggested_actions = report_json.get("suggested_actions", [])
-    if not isinstance(suggested_actions, list) or not suggested_actions:
-        return None
+    steps: list[str] = []
 
-    steps = [
-        str(item.get("suggested_command", "")).strip()
-        for item in suggested_actions
-        if isinstance(item, dict) and str(item.get("suggested_command", "")).strip()
-    ]
+    if isinstance(suggested_actions, list):
+        for item in suggested_actions:
+            if not isinstance(item, dict):
+                continue
+            step = _normalize_step_from_action(item)
+            if step:
+                steps.append(step)
+
+    if not steps:
+        steps = _extract_solution_steps(summary)
+    steps = _dedupe_steps(steps)
     if not steps:
         return None
 
-    summary = _select_summary_text(report.summary_text, report_json, service_name)
     return ProposedFixView(description=summary, steps=steps[:8])
 
 
@@ -437,3 +443,81 @@ def _truncate_line(text: str, max_len: int = 180) -> str:
     if len(normalized) <= max_len:
         return normalized
     return f"{normalized[: max_len - 3].rstrip()}..."
+
+
+def _normalize_step_from_action(item: dict[str, Any]) -> str:
+    command = str(item.get("suggested_command", "")).strip()
+    description = str(item.get("description", "")).strip()
+    title = str(item.get("title", "")).strip()
+
+    placeholder_markers = (
+        "# manual investigation command",
+        "# inspect logs and service health manually",
+    )
+    normalized_command = command.lower()
+    candidates: list[str] = []
+    if command and all(marker not in normalized_command for marker in placeholder_markers):
+        candidates.append(command)
+    candidates.extend([description, title])
+
+    for candidate in candidates:
+        cleaned = _clean_step_text(candidate)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _extract_solution_steps(summary: str) -> list[str]:
+    if not summary.strip():
+        return []
+
+    pattern = r"##\s*Solution Suggestions\s*(.*?)(?=\n##\s|\Z)"
+    match = re.search(pattern, summary, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return []
+
+    body = match.group(1)
+    steps: list[str] = []
+    for raw_line in body.splitlines():
+        cleaned = _clean_step_text(raw_line)
+        if not cleaned:
+            continue
+        steps.append(cleaned)
+        if len(steps) >= 8:
+            break
+    return steps
+
+
+def _clean_step_text(value: str) -> str:
+    text = " ".join(str(value).split()).strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"^[-*]\s+", "", text)
+    text = re.sub(r"^\d+\.\s+", "", text).strip()
+    text = text.replace("**", "").strip()
+
+    lower = text.lower()
+    if lower.startswith("manual-only text:"):
+        text = text.split(":", 1)[1].strip()
+    elif lower.startswith("manual only text:"):
+        text = text.split(":", 1)[1].strip()
+
+    if lower.startswith("safety note:") or "do not execute automatically" in lower:
+        return ""
+
+    if text.endswith(":"):
+        text = text[:-1].strip()
+    return text
+
+
+def _dedupe_steps(steps: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for step in steps:
+        normalized = " ".join(step.lower().split())
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(step)
+    return deduped

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -64,8 +66,14 @@ class Analyzer:
     ) -> str:
         return (
             "You are a production incident triage assistant. Return only JSON with keys: "
-            "incident_id,status,root_cause_hypotheses,evidence,code_context,suggested_actions,summary_text,fallback_reason. "
+            "incident_id,status,summary_markdown,summary_text,fallback_reason. "
             "status must be completed.\n\n"
+            "The `summary_markdown` value is required and must use EXACT section headers:\n"
+            "## Investigation Steps\n"
+            "## Problems Found\n"
+            "## Other Important Info\n"
+            "## Solution Suggestions\n\n"
+            "Optional: you may include `root_cause_hypotheses` and `suggested_actions`, but they are not required.\n\n"
             f"Incident ID: {payload.incident_id}\n"
             f"Service: {payload.service_name}\n"
             f"Node: {payload.device_or_node}\n"
@@ -85,43 +93,94 @@ class Analyzer:
         output: dict[str, Any],
         model_meta: dict[str, Any],
     ) -> AnalysisReport:
+        if not isinstance(output, dict):
+            raise ValueError("Gemini output must be a JSON object")
+
+        summary_markdown = _normalize_summary_markdown(output, payload.service_name)
         hypotheses_data = output.get("root_cause_hypotheses", [])
         actions_data = output.get("suggested_actions", [])
 
         hypotheses: list[Hypothesis] = []
-        for item in hypotheses_data[:5]:
+        for item in _to_sequence(hypotheses_data, limit=5):
+            if isinstance(item, dict):
+                hypothesis_text = str(
+                    item.get("hypothesis") or item.get("summary") or item.get("title") or ""
+                ).strip()
+                confidence = _parse_confidence(item.get("confidence"), default=0.2)
+                evidence_refs = _to_string_list(item.get("evidence_refs"), limit=8)
+            else:
+                hypothesis_text = str(item).strip()
+                confidence = 0.2
+                evidence_refs = ["model:plain_hypothesis"]
+
+            if not hypothesis_text:
+                continue
             hypotheses.append(
                 Hypothesis(
-                    hypothesis=str(item.get("hypothesis", "Unknown hypothesis")),
-                    confidence=float(item.get("confidence", 0.2)),
-                    evidence_refs=[str(ref) for ref in item.get("evidence_refs", [])],
+                    hypothesis=hypothesis_text,
+                    confidence=confidence,
+                    evidence_refs=evidence_refs,
                 )
             )
         if not hypotheses:
+            for line in _extract_section_bullets(summary_markdown, "Problems Found", limit=2):
+                hypotheses.append(
+                    Hypothesis(
+                        hypothesis=line,
+                        confidence=0.2,
+                        evidence_refs=["summary_markdown:problems_found"],
+                    )
+                )
+        if not hypotheses:
             hypotheses = [
                 Hypothesis(
-                    hypothesis="Model returned insufficient structured hypotheses.",
+                    hypothesis="Model returned insufficient structured findings.",
                     confidence=0.2,
                     evidence_refs=["model:empty_hypothesis"],
                 )
             ]
 
         actions: list[SuggestedAction] = []
-        for item in actions_data[:5]:
+        for item in _to_sequence(actions_data, limit=5):
+            if isinstance(item, dict):
+                title = str(item.get("title", "")).strip() or "Investigation step"
+                description = str(item.get("description", "")).strip()
+                suggested_command = str(item.get("suggested_command", "")).strip()
+                safety_note = str(item.get("safety_note", "")).strip()
+            else:
+                description = str(item).strip()
+                if not description:
+                    continue
+                title = "Investigation step"
+                suggested_command = description
+                safety_note = ""
+
+            normalized_command = suggested_command or description or title
+
             actions.append(
                 SuggestedAction(
-                    title=str(item.get("title", "Investigation step")),
-                    description=str(item.get("description", "")),
-                    suggested_command=str(item.get("suggested_command", "# manual investigation command")),
-                    safety_note=str(item.get("safety_note", "Suggestion only. Do not execute automatically.")),
+                    title=title,
+                    description=description,
+                    suggested_command=normalized_command,
+                    safety_note=safety_note or "Suggestion only. Do not execute automatically.",
                 )
             )
+        if not actions:
+            for line in _extract_section_bullets(summary_markdown, "Solution Suggestions", limit=5):
+                actions.append(
+                    SuggestedAction(
+                        title="Suggested action",
+                        description=line,
+                        suggested_command=line,
+                        safety_note="Suggestion only. Do not execute automatically.",
+                    )
+                )
         if not actions:
             actions = [
                 SuggestedAction(
                     title="Manual incident review",
-                    description="No structured actions returned by model.",
-                    suggested_command="# inspect logs and service health manually",
+                    description="No structured solution suggestions were returned by model.",
+                    suggested_command="Inspect logs and service health manually.",
                     safety_note="Suggestion only. Do not execute automatically.",
                 )
             ]
@@ -133,14 +192,16 @@ class Analyzer:
             evidence=evidence,
             code_context=code_context,
             suggested_actions=actions,
-            summary_text=str(output.get("summary_text", "Triage generated without concise summary.")),
+            summary_text=summary_markdown,
             model=ModelInfo(
                 provider="google-gemini",
                 model_name=str(model_meta.get("model_name", self.settings.gemini_model)),
                 latency_ms=int(model_meta.get("latency_ms", 0)),
-                token_usage=model_meta.get("token_usage", {}),
+                token_usage=model_meta.get("token_usage", {})
+                if isinstance(model_meta.get("token_usage", {}), dict)
+                else {},
             ),
-            fallback_reason=output.get("fallback_reason"),
+            fallback_reason=_normalize_optional_string(output.get("fallback_reason")),
         )
         return report
 
@@ -151,3 +212,120 @@ def confidence_from_report(report: AnalysisReport) -> float:
 
 def utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _to_sequence(value: Any, *, limit: int) -> list[Any]:
+    if isinstance(value, list):
+        return value[:limit]
+    if value is None:
+        return []
+    return [value][:limit]
+
+
+def _to_string_list(value: Any, *, limit: int) -> list[str]:
+    values = _to_sequence(value, limit=limit)
+    output: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if text:
+            output.append(text)
+    return output
+
+
+def _parse_confidence(value: Any, *, default: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+
+    if not math.isfinite(numeric):
+        return default
+    if numeric < 0:
+        return 0.0
+    if numeric > 1 and numeric <= 100:
+        numeric /= 100
+    if numeric > 1:
+        return 1.0
+    return numeric
+
+
+def _normalize_summary_markdown(output: dict[str, Any], service_name: str) -> str:
+    candidates = (
+        output.get("summary_markdown"),
+        output.get("summary_text"),
+        output.get("summary"),
+    )
+    for candidate in candidates:
+        text = str(candidate).strip() if candidate is not None else ""
+        if text and _has_required_sections(text):
+            return text
+
+    fallback_text = ""
+    for candidate in candidates:
+        text = str(candidate).strip() if candidate is not None else ""
+        if text:
+            fallback_text = text
+            break
+    if not fallback_text:
+        fallback_text = f"No concise model summary was produced for {service_name}."
+
+    return _build_structured_summary(fallback_text, service_name)
+
+
+def _has_required_sections(markdown: str) -> bool:
+    normalized = " ".join(markdown.lower().split())
+    required_sections = (
+        "investigation steps",
+        "problems found",
+        "other important info",
+        "solution suggestions",
+    )
+    return all(section in normalized for section in required_sections)
+
+
+def _build_structured_summary(base_text: str, service_name: str) -> str:
+    line = " ".join(base_text.split()).strip()
+    return "\n".join(
+        [
+            "## Investigation Steps",
+            f"- Reviewed model output for `{service_name}` and normalized it into required markdown sections.",
+            "",
+            "## Problems Found",
+            f"- {line}",
+            "",
+            "## Other Important Info",
+            "- Original model response did not include all required markdown sections.",
+            "",
+            "## Solution Suggestions",
+            "- Validate the suggested remediation steps against live telemetry before applying changes.",
+        ]
+    )
+
+
+def _extract_section_bullets(markdown: str, section_name: str, *, limit: int) -> list[str]:
+    pattern = rf"##\s*{re.escape(section_name)}\s*(.*?)(?=\n##\s|\Z)"
+    match = re.search(pattern, markdown, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return []
+
+    body = match.group(1)
+    output: list[str] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        normalized = re.sub(r"^[-*]\s+", "", line)
+        normalized = re.sub(r"^\d+\.\s+", "", normalized).strip()
+        if not normalized:
+            continue
+        output.append(normalized)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _normalize_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
