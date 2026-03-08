@@ -19,6 +19,35 @@ iframe.style.cssText = `
 
 document.body.appendChild(iframe);
 
+// --- NUCLEAR FIX: CSS OVERRIDE ---
+// This kills the "ghost" styles even if the browser refuses to repaint the attribute change.
+let ghostStyleTag = null;
+function injectGhostStyles() {
+  if (document.getElementById('doctor-ghost-killer')) return;
+  ghostStyleTag = document.createElement('style');
+  ghostStyleTag.id = 'doctor-ghost-killer';
+  ghostStyleTag.innerHTML = `
+    /* Force-hide any underline elements/pseudo-elements on other tabs */
+    nav a:not(#doctor-tab):not(#doctor-tab *)::after,
+    nav a:not(#doctor-tab):not(#doctor-tab *)::before,
+    nav [aria-current="page"]:not(#doctor-tab):not(#doctor-tab *) ~ div {
+      opacity: 0 !important;
+      display: none !important;
+      transform: scaleY(0) !important;
+    }
+    /* Reset text color for non-doctor tabs to a neutral gray */
+    nav a:not(#doctor-tab):not(#doctor-tab *) {
+      color: #6b7280 !important; /* Tailwind gray-500 */
+    }
+  `;
+  document.head.appendChild(ghostStyleTag);
+}
+
+function removeGhostStyles() {
+  const tag = document.getElementById('doctor-ghost-killer');
+  if (tag) tag.remove();
+}
+
 function getPageBg() {
   const raw = getComputedStyle(document.body).backgroundColor;
   const m = raw.match(/\d+/g);
@@ -75,13 +104,44 @@ function stealActiveFromNav() {
   });
 }
 
+// --- NUCLEAR FIX: REPAINT JOLT ---
+function triggerHeavyRepaint() {
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+  
+  // 1. Force a new Stacking Context/Compositor Layer
+  nav.style.willChange = 'transform, opacity, filter';
+  nav.style.filter = 'blur(0.01px)'; 
+  
+  requestAnimationFrame(() => {
+    // 2. Access offsetHeight to flush layout
+    void nav.offsetHeight;
+    
+    requestAnimationFrame(() => {
+      // 3. Revert and signal a window interaction
+      nav.style.filter = '';
+      nav.style.willChange = '';
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
+}
+
 function startNavStealing() {
+  injectGhostStyles();
   stealActiveFromNav();
+  triggerHeavyRepaint();
+
   if (navStealObserver) navStealObserver.disconnect();
   const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
   if (!nav) return;
+
   navStealObserver = new MutationObserver(stealActiveFromNav);
-  navStealObserver.observe(nav, { attributes: true, attributeFilter: ['aria-current'], childList: true, subtree: true });
+  navStealObserver.observe(nav, { 
+    attributes: true, 
+    attributeFilter: ['aria-current', 'class'], // Watch classes too in case of Tailwind overrides
+    childList: true, 
+    subtree: true 
+  });
 }
 
 function stopNavStealing() {
@@ -90,8 +150,8 @@ function stopNavStealing() {
     if (document.contains(el)) el.setAttribute('aria-current', 'page');
   });
   stolenActive.clear();
-  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
-  if (nav) { nav.style.display = 'none'; nav.offsetHeight; nav.style.display = ''; }
+  removeGhostStyles();
+  triggerHeavyRepaint();
 }
 
 function getTabContainer(a) {
@@ -118,18 +178,13 @@ function findMachinesContainer() {
 }
 
 function syncPanel() {
-
   if (isOnDoctorPage()) {
-
     const main = getMainContainer();
     const bottom = getNavBottom();
     const availableHeight = Math.max(window.innerHeight - bottom, 480);
     const bg = getPageBg();
 
-    if (main && iframe.parentElement !== main) {
-      main.appendChild(iframe);
-    }
-
+    if (main && iframe.parentElement !== main) main.appendChild(iframe);
     hideMainContent(main);
 
     iframe.style.width = main ? '100%' : '100vw';
@@ -139,18 +194,15 @@ function syncPanel() {
 
     if (!iframeLoaded) {
       iframeLoaded = true;
-      iframe.src =
-        chrome.runtime.getURL('index.html')
-        + '?embedded=true'
-        + '&apiBase=' + encodeURIComponent(API_BASE)
-        + '&bg=' + encodeURIComponent(bg);
+      iframe.src = chrome.runtime.getURL('index.html') + 
+                  '?embedded=true' + 
+                  '&apiBase=' + encodeURIComponent(API_BASE) + 
+                  '&bg=' + encodeURIComponent(bg);
     }
 
-    // Read active color BEFORE stealing so liveActive is still in the DOM
     const liveActive = document.querySelector('a[href*="/admin/"][aria-current="page"]:not(#doctor-tab):not(#doctor-tab *)');
     const activeColor = liveActive ? getComputedStyle(liveActive).color : '#3b82f6';
 
-    // Strip aria-current from all other nav tabs + watch for React re-adds
     startNavStealing();
 
     const tab = document.getElementById('doctor-tab');
@@ -161,7 +213,6 @@ function syncPanel() {
         innerA.querySelectorAll('*').forEach(el => el.style.setProperty('color', activeColor, 'important'));
       }
 
-      // Absolutely-positioned underline div matching Tailscale's style
       let line = tab.querySelector('#doctor-underline');
       if (!line) {
         tab.style.position = 'relative';
@@ -178,7 +229,6 @@ function syncPanel() {
     }
 
   } else {
-
     iframe.style.display = 'none';
     restoreMainContent();
     stopNavStealing();
@@ -196,49 +246,32 @@ function syncPanel() {
   }
 }
 
-const origPush = history.pushState.bind(history);
-const origReplace = history.replaceState.bind(history);
-
-history.pushState = (...args) => { origPush(...args); syncPanel(); };
-history.replaceState = (...args) => { origReplace(...args); syncPanel(); };
-
+// History API hooks
+history.pushState = (...args) => { nativePush(...args); syncPanel(); };
+history.replaceState = (...args) => { nativeReplace(...args); syncPanel(); };
 window.addEventListener('popstate', syncPanel);
 
 window.addEventListener('resize', () => {
-
   if (!isOnDoctorPage()) return;
-
   const main = getMainContainer();
-
-  if (main && iframe.parentElement !== main) {
-    main.appendChild(iframe);
-  }
-
+  if (main && iframe.parentElement !== main) main.appendChild(iframe);
   hideMainContent(main);
-
   const bottom = getNavBottom();
-  const availableHeight = Math.max(window.innerHeight - bottom, 480);
-
-  iframe.style.height = `${availableHeight}px`;
+  iframe.style.height = `${Math.max(window.innerHeight - bottom, 480)}px`;
 });
 
 function buildTab(templateContainer) {
-
   const tab = templateContainer.cloneNode(true);
-
   tab.id = 'doctor-tab';
   tab.style.cursor = 'pointer';
   tab.style.marginLeft = '1rem';
-
   tab.removeAttribute('aria-current');
   tab.querySelectorAll('[aria-current]').forEach(el => el.removeAttribute('aria-current'));
 
   const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
-
   if (innerA) innerA.href = DOCTOR_PATH;
 
   const svg = tab.querySelector('svg');
-
   if (svg) {
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('width', '16');
@@ -247,7 +280,6 @@ function buildTab(templateContainer) {
   }
 
   const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
-
   while (walker.nextNode()) {
     if (walker.currentNode.textContent.trim()) {
       walker.currentNode.textContent = 'Doctor';
@@ -258,7 +290,6 @@ function buildTab(templateContainer) {
   tab.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    e.stopImmediatePropagation();
     nativePush({}, '', DOCTOR_PATH);
     syncPanel();
   }, true);
@@ -267,49 +298,29 @@ function buildTab(templateContainer) {
 }
 
 function ensureTab() {
-
   const settingsContainer = findSettingsContainer();
-
   if (!settingsContainer) return;
-
   const existing = document.getElementById('doctor-tab');
-
   if (existing && settingsContainer.nextElementSibling === existing) return;
-
   if (existing) {
     settingsContainer.insertAdjacentElement('afterend', existing);
     syncPanel();
     return;
   }
-
   const machinesContainer = findMachinesContainer();
-
   if (!machinesContainer) return;
-
-  const tab = buildTab(machinesContainer);
-
-  settingsContainer.insertAdjacentElement('afterend', tab);
-
-  console.log('[Doctor] tab injected ✓');
-
+  settingsContainer.insertAdjacentElement('afterend', buildTab(machinesContainer));
   syncPanel();
 }
 
 ensureTab();
 
 let debounceTimer = null;
-
 const observer = new MutationObserver(() => {
-
   clearTimeout(debounceTimer);
-
   debounceTimer = setTimeout(() => {
-
     ensureTab();
     syncPanel();
-
   }, 300);
-
 });
-
 observer.observe(document.body, { childList: true, subtree: true });
