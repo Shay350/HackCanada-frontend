@@ -2,6 +2,8 @@ export interface ProposedFix {
   description: string;
   steps: string[];
   markdown?: string;
+  destructiveActions?: string[];
+  targetNode?: string;
 }
 
 export interface Incident {

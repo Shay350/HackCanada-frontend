@@ -1,6 +1,7 @@
 import { TerminalSquare, MoreHorizontal, ChevronDown } from "lucide-react";
 import { Incident } from "../lib/types";
 import { useState } from "react";
+import { getDiagnosisSummaryMarkdown } from "../lib/diagnosisSummary";
 import { renderMarkdownBlocks } from "../lib/renderMarkdown";
 
 export const IncidentCard = ({
@@ -283,8 +284,7 @@ export const IncidentCard = ({
                     }}
                   >
                     {renderMarkdownBlocks(
-                      incident.proposedFix.markdown?.trim() ||
-                        incident.proposedFix.description,
+                      getDiagnosisSummaryMarkdown(incident),
                       5,
                     )}
                   </div>

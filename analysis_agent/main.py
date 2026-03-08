@@ -152,7 +152,7 @@ async def list_incidents(limit: int = 50, db: AsyncSession = Depends(get_db)) ->
         ui_status = _map_job_to_ui_status(job.status, uptime_status)
         logs = _extract_logs(payload, report_json)
         confidence = float(report.confidence) if report else 0.0
-        proposed_fix = _extract_proposed_fix(report, report_json)
+        proposed_fix = _extract_proposed_fix(report, report_json, service_name)
 
         output.append(
             IncidentView(
@@ -277,7 +277,11 @@ def _extract_logs(payload: dict[str, Any], report_json: dict[str, Any]) -> list[
     return [description]
 
 
-def _extract_proposed_fix(report: AnalysisReport | None, report_json: dict[str, Any]) -> ProposedFixView | None:
+def _extract_proposed_fix(
+    report: AnalysisReport | None,
+    report_json: dict[str, Any],
+    service_name: str,
+) -> ProposedFixView | None:
     if report is None:
         return None
 
@@ -293,4 +297,116 @@ def _extract_proposed_fix(report: AnalysisReport | None, report_json: dict[str, 
     if not steps:
         return None
 
-    return ProposedFixView(description=report.summary_text, steps=steps[:8])
+    summary = _select_summary_text(report.summary_text, report_json, service_name)
+    return ProposedFixView(description=summary, steps=steps[:8])
+
+
+def _select_summary_text(raw_summary: str, report_json: dict[str, Any], service_name: str) -> str:
+    summary = str(raw_summary or "").strip()
+    if not _is_low_quality_summary(summary):
+        return summary
+    return _build_summary_fallback(report_json, service_name)
+
+
+def _is_low_quality_summary(summary: str) -> bool:
+    normalized = " ".join(summary.lower().split())
+    if not normalized:
+        return True
+
+    weak_markers = (
+        "without a structured report",
+        "manual triage",
+        "no structured actions",
+        "triage generated without concise summary",
+        "insufficient structured",
+        "insufficient evidence",
+    )
+    return any(marker in normalized for marker in weak_markers)
+
+
+def _build_summary_fallback(report_json: dict[str, Any], service_name: str) -> str:
+    hypotheses = _extract_top_hypotheses(report_json)
+    evidence = _extract_evidence_highlights(report_json)
+
+    lines = [
+        f"Automated diagnosis is incomplete for **{service_name}**. Current signals suggest:",
+    ]
+
+    if hypotheses:
+        lines.append("## Leading hypotheses")
+        lines.extend(hypotheses)
+
+    if evidence:
+        lines.append("## Evidence highlights")
+        lines.extend(evidence)
+
+    lines.append("## Next step")
+    lines.append("- Use the execution plan below to validate or rule out these hypotheses.")
+
+    return "\n".join(lines)
+
+
+def _extract_top_hypotheses(report_json: dict[str, Any]) -> list[str]:
+    items = report_json.get("root_cause_hypotheses", [])
+    if not isinstance(items, list):
+        return []
+
+    output: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        hypothesis = str(item.get("hypothesis", "")).strip()
+        if not hypothesis:
+            continue
+
+        confidence = _parse_confidence_percent(item.get("confidence"))
+        if confidence is None:
+            output.append(f"- {hypothesis}")
+        else:
+            output.append(f"- {hypothesis} ({confidence}% confidence)")
+
+        if len(output) >= 2:
+            break
+
+    return output
+
+
+def _extract_evidence_highlights(report_json: dict[str, Any]) -> list[str]:
+    items = report_json.get("evidence", [])
+    if not isinstance(items, list):
+        return []
+
+    output: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        snippet = str(item.get("snippet", "")).strip()
+        if not snippet:
+            continue
+        output.append(f"- {_truncate_line(snippet)}")
+        if len(output) >= 2:
+            break
+
+    return output
+
+
+def _parse_confidence_percent(value: Any) -> int | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if numeric < 0:
+        numeric = 0
+    if numeric <= 1:
+        numeric *= 100
+    if numeric > 100:
+        numeric = 100
+    return int(round(numeric))
+
+
+def _truncate_line(text: str, max_len: int = 180) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= max_len:
+        return normalized
+    return f"{normalized[: max_len - 3].rstrip()}..."

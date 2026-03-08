@@ -1,10 +1,13 @@
 import { X, Check, AlertTriangle } from 'lucide-react';
 import { Incident } from '../lib/types';
+import { getDiagnosisSummaryMarkdown } from '../lib/diagnosisSummary';
 import { renderMarkdownBlocks } from '../lib/renderMarkdown';
 
 const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () => void }) => {
-  const summaryText = incident.proposedFix?.description || 'No diagnosis summary available.';
-  const markdownSummary = incident.proposedFix?.markdown?.trim() || summaryText;
+  const markdownSummary = getDiagnosisSummaryMarkdown(incident);
+  const steps = incident.proposedFix?.steps ?? [];
+  const destructiveActions = incident.proposedFix?.destructiveActions ?? [];
+  const targetNode = incident.proposedFix?.targetNode?.trim() || 'Unknown target';
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '2rem' }} className="animate-fade-in">
@@ -39,12 +42,17 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
           <div>
             <h3 style={{ fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-primary)', fontWeight: 600, paddingLeft: '0.25rem' }}>Execution Plan</h3>
             <div className="ts-panel flex-col" style={{ overflow: 'hidden' }}>
-              {incident.proposedFix?.steps.map((step: string, idx: number) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.875rem 1rem', borderBottom: idx !== incident.proposedFix!.steps.length - 1 ? '1px solid var(--borderColor)' : 'none', backgroundColor: 'var(--bg-surface)' }}>
-                  <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--bg-base)', border: '1px solid var(--borderColor)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+              {steps.length === 0 && (
+                <div style={{ padding: '0.875rem 1rem', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-surface)', fontSize: '0.875rem' }}>
+                  No executable steps provided.
+                </div>
+              )}
+              {steps.map((step: string, idx: number) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.875rem 1rem', borderBottom: idx !== steps.length - 1 ? '1px solid var(--borderColor)' : 'none', backgroundColor: 'var(--bg-surface)' }}>
+                  <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--bg-base)', border: '1px solid var(--borderColor)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', flexShrink: 0 }}>
                     {idx + 1}
                   </div>
-                  <div style={{ flex: 1, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Monaco, monospace', fontSize: '0.8125rem', color: 'var(--text-primary)' }}>
+                  <div style={{ flex: 1, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Monaco, monospace', fontSize: '0.8125rem', color: 'var(--text-primary)', wordBreak: 'break-word' }}>
                     {step}
                   </div>
                 </div>
@@ -52,13 +60,21 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
             </div>
           </div>
 
-          <div style={{ padding: '1rem', backgroundColor: '#FFFBEB', borderRadius: 'var(--radius-md)', border: '1px solid #FDE68A', display: 'flex', gap: '0.75rem' }}>
-             <AlertTriangle size={18} color="#D97706" style={{ flexShrink: 0, marginTop: '2px' }} />
-             <div style={{ fontSize: '0.875rem', color: '#92400E' }}>
+          {destructiveActions.length > 0 && (
+            <div style={{ padding: '1rem', backgroundColor: '#FFFBEB', borderRadius: 'var(--radius-md)', border: '1px solid #FDE68A', display: 'flex', gap: '0.75rem' }}>
+              <AlertTriangle size={18} color="#D97706" style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div style={{ fontSize: '0.875rem', color: '#92400E' }}>
                 <strong style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}>Destructive Actions Included</strong>
-                This fix involves deleting database WAL cache files. A backup script is automatically executed in step 1.
-             </div>
-          </div>
+                <ul style={{ margin: 0, paddingLeft: '1rem' }}>
+                  {destructiveActions.map((action, idx) => (
+                    <li key={idx} style={{ marginBottom: idx === destructiveActions.length - 1 ? 0 : '0.25rem' }}>
+                      {action}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
 
         </div>
 
@@ -66,7 +82,7 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
         <div className="flex items-center justify-between" style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--borderColor)', backgroundColor: 'var(--bg-surface)' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Node</span>
-             <span style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>100.95.82.{incident.id === 'inc-012' ? '12' : '18'}</span>
+             <span style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>{targetNode}</span>
           </div>
 
           <div className="flex gap-2">
