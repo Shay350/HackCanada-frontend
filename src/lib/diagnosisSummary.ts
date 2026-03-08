@@ -9,6 +9,13 @@ const LOW_QUALITY_SUMMARY_MARKERS = [
   'insufficient evidence',
 ];
 
+const REQUIRED_SECTION_MARKERS = [
+  'investigation steps',
+  'problems found',
+  'other important info',
+  'solution suggestions',
+];
+
 const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
 const isLowQualitySummary = (value: string): boolean => {
@@ -17,6 +24,11 @@ const isLowQualitySummary = (value: string): boolean => {
     return true;
   }
   return LOW_QUALITY_SUMMARY_MARKERS.some((marker) => normalized.includes(marker));
+};
+
+const hasRequiredSections = (value: string): boolean => {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  return REQUIRED_SECTION_MARKERS.every((marker) => normalized.includes(marker));
 };
 
 const truncateLine = (value: string, maxLen = 180): string => {
@@ -31,20 +43,29 @@ const buildFallbackSummary = (incident: Incident): string => {
   const highlights = incident.logs
     .map((line) => normalizeWhitespace(line))
     .filter(Boolean)
-    .slice(0, 2)
+    .slice(0, 3)
     .map((line) => `- ${truncateLine(line)}`);
 
   const lines = [
-    `Automated diagnosis is incomplete for **${service}**. Current signals suggest:`,
+    '## Investigation Steps',
+    `- Diagnosis markdown from Gemini is unavailable for **${service}** in this result.`,
+    '- Reviewed available incident logs and payload metadata only.',
+    '',
+    '## Problems Found',
+    '- Root cause is currently inconclusive from model output.',
   ];
 
   if (highlights.length > 0) {
-    lines.push('## Evidence highlights', ...highlights);
+    lines.push(...highlights);
   }
 
   lines.push(
-    '## Next step',
-    '- Review the suggested execution plan below and validate each step against current logs and metrics before applying changes.',
+    '',
+    '## Other Important Info',
+    '- This summary is a frontend fallback and not an AI-authored incident report.',
+    '',
+    '## Solution Suggestions',
+    '- Review execution steps below and validate against live telemetry before applying changes.',
   );
 
   return lines.join('\n');
@@ -52,12 +73,12 @@ const buildFallbackSummary = (incident: Incident): string => {
 
 export const getDiagnosisSummaryMarkdown = (incident: Incident): string => {
   const markdown = incident.proposedFix?.markdown?.trim() || '';
-  if (markdown && !isLowQualitySummary(markdown)) {
+  if (markdown && (hasRequiredSections(markdown) || !isLowQualitySummary(markdown))) {
     return markdown;
   }
 
   const description = incident.proposedFix?.description?.trim() || '';
-  if (description && !isLowQualitySummary(description)) {
+  if (description && (hasRequiredSections(description) || !isLowQualitySummary(description))) {
     return description;
   }
 

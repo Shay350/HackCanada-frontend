@@ -32,6 +32,36 @@ def _heuristic_hypotheses(payload: AnalysisJobCreate) -> list[Hypothesis]:
     return output
 
 
+def _build_summary_markdown(payload: AnalysisJobCreate, hypotheses: list[Hypothesis], evidence: list[EvidenceItem]) -> str:
+    lines = [
+        "## Investigation Steps",
+        f"- Automated model diagnosis is unavailable for **{payload.service_name}** in this run.",
+        "- Built this report from deterministic fallback heuristics and available evidence.",
+        "",
+        "## Problems Found",
+    ]
+
+    for item in hypotheses[:2]:
+        confidence = int(round(max(0.0, min(1.0, item.confidence)) * 100))
+        lines.append(f"- {item.hypothesis} ({confidence}% confidence)")
+
+    highlights = [entry.snippet.strip() for entry in evidence if entry.snippet.strip()][:2]
+    if highlights:
+        lines.append("")
+        lines.append("## Other Important Info")
+        lines.append("- Evidence highlights from monitor/log payload:")
+        lines.extend(f"- {line}" for line in highlights)
+    else:
+        lines.append("")
+        lines.append("## Other Important Info")
+        lines.append("- No additional log highlights were available in the request payload.")
+
+    lines.append("")
+    lines.append("## Solution Suggestions")
+    lines.append("- Use the execution plan below to validate or rule out these hypotheses.")
+    return "\n".join(lines)
+
+
 def build_fallback_report(
     payload: AnalysisJobCreate,
     evidence: list[EvidenceItem],
@@ -55,11 +85,7 @@ def build_fallback_report(
         ),
     ]
 
-    top_confidence = max((item.confidence for item in hypotheses), default=0.2)
-    summary = (
-        f"Fallback triage: {payload.service_name} on {payload.device_or_node} is {payload.uptime_status.value}. "
-        f"Generated {len(hypotheses)} low-confidence hypothesis(es) from logs/description."
-    )
+    summary = _build_summary_markdown(payload, hypotheses, evidence)
 
     return AnalysisReport(
         incident_id=payload.incident_id,

@@ -1,15 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Search, Filter, Download } from 'lucide-react';
 import IncidentCard from './IncidentCard';
 import ReviewModal from './ReviewModal';
 import { Incident } from '../lib/types';
 import { mockIncidents } from '../lib/mockData';
 
+const FAST_POLL_MS = 3000;
+const IDLE_POLL_MS = 20000;
+
 const Dashboard = () => {
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const hasLoadedRealDataRef = useRef(false);
+  const lastKnownHasResolvingRef = useRef(false);
+
+  const selectedIncident = selectedIncidentId
+    ? incidents.find((incident) => incident.id === selectedIncidentId) ?? null
+    : null;
 
   useEffect(() => {
     let active = true;
@@ -19,9 +31,41 @@ const Dashboard = () => {
     const apiBase = apiBaseFromQuery || apiBaseFromEnv || 'http://127.0.0.1:8000';
     const incidentsEndpoint = `${apiBase}/api/v1/analysis/incidents`;
 
-    const loadIncidents = async () => {
+    const clearScheduledPoll = () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+
+    const getNextPollDelay = (nextIncidents: Incident[]) => {
+      const hasResolving = nextIncidents.some((incident) => incident.status === 'resolving');
+      lastKnownHasResolvingRef.current = hasResolving;
+      return hasResolving ? FAST_POLL_MS : IDLE_POLL_MS;
+    };
+
+    const schedulePoll = (delayMs: number) => {
+      if (!active) {
+        return;
+      }
+      clearScheduledPoll();
+      timerRef.current = setTimeout(() => {
+        void pollIncidents();
+      }, delayMs);
+    };
+
+    const pollIncidents = async () => {
+      if (!active || document.hidden || inFlightRef.current) {
+        return;
+      }
+
+      inFlightRef.current = true;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let shouldSetLoadingDone = true;
+
       try {
-        const response = await fetch(incidentsEndpoint);
+        const response = await fetch(incidentsEndpoint, { signal: controller.signal });
         if (!response.ok) {
           throw new Error(`Failed to load incidents: ${response.status}`);
         }
@@ -31,24 +75,70 @@ const Dashboard = () => {
         }
         setIncidents(data);
         setLoadError(null);
+        hasLoadedRealDataRef.current = true;
+        schedulePoll(getNextPollDelay(data));
       } catch (error) {
+        const isAbortError = error instanceof DOMException && error.name === 'AbortError';
+        if (isAbortError) {
+          shouldSetLoadingDone = false;
+          return;
+        }
         if (!active) {
           return;
         }
-        setIncidents(mockIncidents);
+        if (!hasLoadedRealDataRef.current) {
+          setIncidents(mockIncidents);
+          schedulePoll(getNextPollDelay(mockIncidents));
+        } else {
+          const fallbackDelay = lastKnownHasResolvingRef.current ? FAST_POLL_MS : IDLE_POLL_MS;
+          schedulePoll(fallbackDelay);
+        }
         setLoadError(error instanceof Error ? error.message : 'Unable to load incidents');
       } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        inFlightRef.current = false;
         if (active) {
-          setLoading(false);
+          if (shouldSetLoadingDone) {
+            setLoading(false);
+          }
         }
       }
     };
 
-    loadIncidents();
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearScheduledPoll();
+        abortRef.current?.abort();
+        abortRef.current = null;
+        return;
+      }
+      clearScheduledPoll();
+      void pollIncidents();
+    };
+
+    void pollIncidents();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       active = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearScheduledPoll();
+      abortRef.current?.abort();
+      abortRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selectedIncidentId) {
+      return;
+    }
+    const selectedStillExists = incidents.some((incident) => incident.id === selectedIncidentId);
+    if (!selectedStillExists) {
+      setSelectedIncidentId(null);
+    }
+  }, [incidents, selectedIncidentId]);
 
   // We are integrating our Self-Healing metrics inside a Tailscale-like dashboard page.
   // The layout follows the exact dark-mode image provided.
@@ -111,7 +201,7 @@ const Dashboard = () => {
           <IncidentCard
             key={incident.id}
             incident={incident}
-            onReview={() => setSelectedIncident(incident)}
+            onReview={() => setSelectedIncidentId(incident.id)}
             isLast={index === incidents.length - 1}
           />
         ))}
@@ -123,7 +213,7 @@ const Dashboard = () => {
       </div>
 
       {selectedIncident && (
-        <ReviewModal incident={selectedIncident} onClose={() => setSelectedIncident(null)} />
+        <ReviewModal incident={selectedIncident} onClose={() => setSelectedIncidentId(null)} />
       )}
     </div>
   );

@@ -303,9 +303,22 @@ def _extract_proposed_fix(
 
 def _select_summary_text(raw_summary: str, report_json: dict[str, Any], service_name: str) -> str:
     summary = str(raw_summary or "").strip()
-    if not _is_low_quality_summary(summary):
+    if _has_required_sections(summary):
         return summary
+    if not _is_low_quality_summary(summary):
+        return _build_summary_fallback(report_json, service_name, summary)
     return _build_summary_fallback(report_json, service_name)
+
+
+def _has_required_sections(summary: str) -> bool:
+    normalized = " ".join(summary.lower().split())
+    required_sections = (
+        "investigation steps",
+        "problems found",
+        "other important info",
+        "solution suggestions",
+    )
+    return all(section in normalized for section in required_sections)
 
 
 def _is_low_quality_summary(summary: str) -> bool:
@@ -320,27 +333,41 @@ def _is_low_quality_summary(summary: str) -> bool:
         "triage generated without concise summary",
         "insufficient structured",
         "insufficient evidence",
+        "fallback triage:",
     )
     return any(marker in normalized for marker in weak_markers)
 
 
-def _build_summary_fallback(report_json: dict[str, Any], service_name: str) -> str:
+def _build_summary_fallback(report_json: dict[str, Any], service_name: str, base_summary: str = "") -> str:
     hypotheses = _extract_top_hypotheses(report_json)
     evidence = _extract_evidence_highlights(report_json)
 
     lines = [
-        f"Automated diagnosis is incomplete for **{service_name}**. Current signals suggest:",
+        "## Investigation Steps",
+        f"- Diagnosis markdown was not provided for **{service_name}**.",
+        "- Built this summary from available hypotheses and evidence in the report payload.",
+        "",
+        "## Problems Found",
     ]
 
+    if base_summary:
+        lines.append(f"- {_truncate_line(base_summary)}")
+
     if hypotheses:
-        lines.append("## Leading hypotheses")
         lines.extend(hypotheses)
 
     if evidence:
-        lines.append("## Evidence highlights")
+        lines.append("")
+        lines.append("## Other Important Info")
+        lines.append("- Evidence highlights:")
         lines.extend(evidence)
+    else:
+        lines.append("")
+        lines.append("## Other Important Info")
+        lines.append("- No additional evidence highlights were available in this report.")
 
-    lines.append("## Next step")
+    lines.append("")
+    lines.append("## Solution Suggestions")
     lines.append("- Use the execution plan below to validate or rule out these hypotheses.")
 
     return "\n".join(lines)

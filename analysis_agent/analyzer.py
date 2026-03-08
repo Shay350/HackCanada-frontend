@@ -136,7 +136,7 @@ class Analyzer:
             summary_text=str(output.get("summary_text", "Triage generated without concise summary.")),
             model=ModelInfo(
                 provider="google-gemini",
-                model_name=self.settings.gemini_model,
+                model_name=str(model_meta.get("model_name", self.settings.gemini_model)),
                 latency_ms=int(model_meta.get("latency_ms", 0)),
                 token_usage=model_meta.get("token_usage", {}),
             ),
