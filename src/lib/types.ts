@@ -1,6 +1,7 @@
 export interface ProposedFix {
   description: string;
   steps: string[];
+  markdown?: string;
 }
 
 export interface Incident {

@@ -1,12 +1,16 @@
 import { X, Check, AlertTriangle } from 'lucide-react';
 import { Incident } from '../lib/types';
+import { renderMarkdownBlocks } from '../lib/renderMarkdown';
 
 const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () => void }) => {
+  const summaryText = incident.proposedFix?.description || 'No diagnosis summary available.';
+  const markdownSummary = incident.proposedFix?.markdown?.trim() || summaryText;
+
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '2rem' }} className="animate-fade-in">
-      
+
       <div className="ts-panel" style={{ width: '100%', maxWidth: '700px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)' }}>
-        
+
         {/* Header */}
         <div className="flex items-center justify-between" style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--borderColor)', backgroundColor: 'var(--bg-surface)' }}>
           <div className="flex items-center gap-3">
@@ -24,12 +28,12 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
 
         {/* Content */}
         <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', backgroundColor: 'var(--bg-base)' }}>
-          
+
           <div className="ts-panel" style={{ padding: '1.25rem' }}>
             <h3 style={{ fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-primary)', fontWeight: 600 }}>Diagnosis Summary</h3>
-            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              {incident.proposedFix?.description}
-            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {renderMarkdownBlocks(markdownSummary)}
+            </div>
           </div>
 
           <div>
@@ -64,7 +68,7 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Node</span>
              <span style={{ fontSize: '0.875rem', color: 'var(--text-primary)' }}>100.95.82.{incident.id === 'inc-012' ? '12' : '18'}</span>
           </div>
-          
+
           <div className="flex gap-2">
             <button className="btn btn-secondary" onClick={onClose} style={{ padding: '0.5rem 1rem' }}>Cancel</button>
             <button className="btn btn-primary" onClick={onClose} style={{ padding: '0.5rem 1rem', gap: '0.5rem' }}>

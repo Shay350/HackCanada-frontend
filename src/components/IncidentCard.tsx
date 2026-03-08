@@ -1,32 +1,33 @@
 import { TerminalSquare, MoreHorizontal, ChevronDown } from 'lucide-react';
 import { Incident } from '../lib/types';
 import { useState } from 'react';
+import { renderMarkdownBlocks } from '../lib/renderMarkdown';
 
 export const IncidentCard = ({ incident, onReview }: { incident: Incident, onReview: () => void, isLast?: boolean }) => {
   const [expanded, setExpanded] = useState(incident.status === 'issue' || incident.status === 'resolving');
 
   return (
-    <div style={{ 
-      display: 'flex', 
+    <div style={{
+      display: 'flex',
       flexDirection: 'column',
       borderBottom: '1px solid var(--borderColor)',
     }} className="ts-row-hover">
-      
+
       {/* Table Row Style Header matching the new Dashboard grid */}
-      <div 
+      <div
         style={{ display: 'grid', gridTemplateColumns: 'minmax(250px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) 40px', alignItems: 'center', padding: '1.25rem 1rem', cursor: 'pointer', transition: 'background-color 0.15s' }}
         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-surface)'}
         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
         onClick={() => setExpanded(!expanded)}
       >
-        
+
         {/* Name Column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--text-primary)' }}>{incident.service.toLowerCase().replace(/\s+/g, '-')}</span>
           </div>
           <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>emen3998@gmail.com</span>
-          
+
           <div style={{ display: 'flex', gap: '0.375rem', marginTop: '0.375rem' }}>
              <span style={{ fontSize: '0.625rem', backgroundColor: 'rgba(255,255,255,0.1)', color: 'var(--text-secondary)', padding: '0.125rem 0.375rem', borderRadius: '4px', fontWeight: 600 }}>Expiry disabled</span>
              {incident.status !== 'online' && (
@@ -70,7 +71,7 @@ export const IncidentCard = ({ incident, onReview }: { incident: Incident, onRev
       {/* Agent Output - Extends from the row when there's an issue */}
       {expanded && (incident.status === 'issue' || incident.status === 'resolving') && (
         <div style={{ padding: '0 1rem 1.5rem 1rem', display: 'flex', flexDirection: 'column', gap: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.01)' }}>
-          
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
              <h4 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <TerminalSquare size={16} color="var(--accent-text)" /> AI Diagnostic Stream
@@ -92,9 +93,11 @@ export const IncidentCard = ({ incident, onReview }: { incident: Incident, onRev
             <div style={{ border: '1px solid var(--borderColor)', borderRadius: 'var(--radius-md)', padding: '1.25rem', backgroundColor: 'var(--bg-surface)', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ flex: 1, minWidth: '300px' }}>
                 <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.375rem' }}>Auto-Healer Plan Ready</div>
-                <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{incident.proposedFix.description}</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '220px', overflow: 'hidden' }}>
+                  {renderMarkdownBlocks(incident.proposedFix.markdown?.trim() || incident.proposedFix.description, 5)}
+                </div>
               </div>
-              
+
               <div className="flex gap-2">
                  <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); onReview(); }}>
                     Review & Apply
@@ -108,7 +111,7 @@ export const IncidentCard = ({ incident, onReview }: { incident: Incident, onRev
 
         </div>
       )}
-      
+
     </div>
   );
 };
