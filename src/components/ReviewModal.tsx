@@ -72,7 +72,7 @@ const ReviewModal = ({ incident, onClose }: { incident: Incident, onClose: () =>
           <div className="flex gap-2">
             <button className="btn btn-secondary" onClick={onClose} style={{ padding: '0.5rem 1rem' }}>Cancel</button>
             <button className="btn btn-primary" onClick={onClose} style={{ padding: '0.5rem 1rem', gap: '0.5rem' }}>
-               <Check size={16} /> Deploy Fix
+               <Check size={16} /> Okay
             </button>
           </div>
         </div>
