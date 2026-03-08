@@ -1,48 +1,80 @@
-# HackCanada Frontend
+# HackCanada
 
-React + Vite frontend for the HackCanada self-healing dashboard.
+Self-healing network/service dashboard with a React frontend and a FastAPI analysis backend.
 
-## Requirements
+## Repo structure
 
-- Node.js 20+
-- npm 10+
+- `src/`: frontend dashboard (Vite + React + TypeScript)
+- `analysis_agent/`: backend incident analysis service (FastAPI + Postgres + Gemini)
+- `extension/`: built extension assets
 
-## Environment
-
-Copy `.env.example` to `.env` and set the backend URL for non-proxied environments:
-
-```bash
-cp .env.example .env
-```
-
-`VITE_API_BASE_URL` should point to the backend service base URL, for example:
-
-- Local backend: `http://127.0.0.1:8000`
-- Production backend: `https://<your-backend-domain>`
-
-## Local development
+## Frontend (Vite)
 
 ```bash
 npm install
 npm run dev
 ```
 
-In local development, requests to `/api/*` are proxied to `http://127.0.0.1:8000` by Vite unless `VITE_API_BASE_URL` is explicitly set.
+Frontend expects backend API at `/api/*`.
+In local dev, Vite proxies `/api` to `http://127.0.0.1:8000`.
 
-## Build
+## Backend (analysis agent)
 
 ```bash
-npm run build
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+uvicorn analysis_agent.main:app --reload
 ```
 
-## Contract with backend
+### Core API endpoints
 
-Frontend reads incidents from:
-
+- `POST /api/v1/analysis/jobs`
 - `GET /api/v1/analysis/incidents`
+- `GET /api/v1/analysis/jobs/{job_id}`
+- `GET /api/v1/analysis/jobs/{job_id}/result`
+- `GET /api/v1/analysis/jobs/{job_id}/summary`
+- `GET /api/v1/analysis/jobs/{job_id}/download`
 
-The API base is resolved in this order:
+### Intake JSON format (Uptime Kuma style)
 
-1. `apiBase` query parameter
-2. `VITE_API_BASE_URL`
-3. Relative `/api/*` path (via local proxy)
+```json
+{
+  "monitor": "test-service",
+  "status": "DOWN",
+  "msg": "connection refused",
+  "url": "https://example.com",
+  "time": "2026-03-07T12:00:00Z"
+}
+```
+
+Supported statuses for triage: `DOWN/down`, `DEGRADED/degraded`.
+
+Optional teammate-provided extracted logs around the timestamp:
+
+```json
+{
+  "monitor": "test-service",
+  "status": "DOWN",
+  "msg": "connection refused",
+  "url": "https://example.com",
+  "time": "2026-03-07T12:00:00Z",
+  "log_snippets": [
+    {
+      "timestamp": "2026-03-07T11:59:50Z",
+      "source": "service.log",
+      "line": "dial tcp 10.0.0.12:443: connect: connection refused"
+    }
+  ],
+  "metadata": {
+    "device_or_node": "mac-mini-1"
+  }
+}
+```
+
+## Safety constraints
+
+- No command execution path is implemented in backend.
+- Suggested commands are text-only guidance.
+- Code retrieval is read-only and constrained to allowlisted roots.

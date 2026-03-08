@@ -3,6 +3,7 @@ import { Search, Filter, Download } from 'lucide-react';
 import IncidentCard from './IncidentCard';
 import ReviewModal from './ReviewModal';
 import { Incident } from '../lib/types';
+import { mockIncidents } from '../lib/mockData';
 
 const Dashboard = () => {
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
@@ -15,7 +16,7 @@ const Dashboard = () => {
     const params = new URLSearchParams(window.location.search);
     const apiBaseFromQuery = params.get('apiBase')?.trim() || '';
     const apiBaseFromEnv = (import.meta.env.VITE_API_BASE_URL || '').trim();
-    const apiBase = apiBaseFromQuery || apiBaseFromEnv;
+    const apiBase = apiBaseFromQuery || apiBaseFromEnv || 'http://127.0.0.1:8000';
     const incidentsEndpoint = `${apiBase}/api/v1/analysis/incidents`;
 
     const loadIncidents = async () => {
@@ -34,7 +35,7 @@ const Dashboard = () => {
         if (!active) {
           return;
         }
-        setIncidents([]);
+        setIncidents(mockIncidents);
         setLoadError(error instanceof Error ? error.message : 'Unable to load incidents');
       } finally {
         if (active) {
@@ -58,9 +59,9 @@ const Dashboard = () => {
       {/* Page Header Area */}
       <div className="flex items-start justify-between">
         <div className="flex-col gap-1">
-           <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Services</h1>
+           <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Doctor</h1>
            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-             Manage the services connected to your tailnet. <a href="#" style={{ color: 'var(--accent-text)', textDecoration: 'none' }}>Learn more</a>
+             Monitor the health and performance of services connected to your tailnet. <a href="#" style={{ color: 'var(--accent-text)', textDecoration: 'none' }}>Learn more</a>
            </span>
         </div>
         <button className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>Add service</button>

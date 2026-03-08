@@ -1,192 +1,326 @@
-const TAB_ID = 'server-monitor-tab';
-const TAB_LABEL = 'Server Monitor';
-const backendApiBase = 'http://127.0.0.1:8000';
+const API_BASE = 'http://127.0.0.1:8000';
+const DOCTOR_PATH = '/admin/doctor';
+const HIDDEN_ATTR = 'data-doctor-hidden';
+const PREV_DISPLAY_ATTR = 'data-doctor-prev-display';
+
+const nativePush = History.prototype.pushState.bind(history);
+const nativeReplace = History.prototype.replaceState.bind(history);
 
 const iframe = document.createElement('iframe');
-iframe.id = 'self-healing-panel';
+iframe.id = 'doctor-panel';
+let iframeLoaded = false;
+
 iframe.style.cssText = `
-  position: fixed;
-  left: 0;
-  width: 100vw;
+  width: 100%;
   border: none;
-  z-index: 9999;
   display: none;
   background: #111111;
 `;
+
 document.body.appendChild(iframe);
 
-let active = false;
+// --- NUCLEAR FIX: CSS OVERRIDE ---
+// This kills the "ghost" styles even if the browser refuses to repaint the attribute change.
+let ghostStyleTag = null;
+function injectGhostStyles() {
+  if (document.getElementById('doctor-ghost-killer')) return;
+  ghostStyleTag = document.createElement('style');
+  ghostStyleTag.id = 'doctor-ghost-killer';
+  ghostStyleTag.innerHTML = `
+    /* Force-hide any underline elements/pseudo-elements on other tabs */
+    nav a:not(#doctor-tab):not(#doctor-tab *)::after,
+    nav a:not(#doctor-tab):not(#doctor-tab *)::before,
+    nav [aria-current="page"]:not(#doctor-tab):not(#doctor-tab *) ~ div {
+      opacity: 0 !important;
+      display: none !important;
+      transform: scaleY(0) !important;
+    }
+    /* Reset text color for non-doctor tabs to a neutral gray */
+    nav a:not(#doctor-tab):not(#doctor-tab *) {
+      color: #6b7280 !important; /* Tailwind gray-500 */
+    }
+  `;
+  document.head.appendChild(ghostStyleTag);
+}
 
-function normalizeText(value) {
-  return (value || '').trim().toLowerCase();
+function removeGhostStyles() {
+  const tag = document.getElementById('doctor-ghost-killer');
+  if (tag) tag.remove();
 }
 
 function getPageBg() {
   const raw = getComputedStyle(document.body).backgroundColor;
   const m = raw.match(/\d+/g);
-  if (m && m.length >= 3) {
-    return '#'
-      + m
-        .slice(0, 3)
-        .map((n) => (+n).toString(16).padStart(2, '0'))
-        .join('');
-  }
+  if (m && m.length >= 3)
+    return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
   return '#111111';
 }
 
-function getNavLinks() {
-  const scoped = [
-    ...document.querySelectorAll('nav a[href], [role="navigation"] a[href]'),
-  ];
+function getNavBottom() {
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  return nav ? nav.getBoundingClientRect().bottom : 56;
+}
 
-  if (scoped.length > 0) {
-    return scoped;
+function isOnDoctorPage() {
+  return window.location.pathname === DOCTOR_PATH;
+}
+
+function getMainContainer() {
+  return document.querySelector('main') || document.querySelector('[role="main"]');
+}
+
+function hideMainContent(main) {
+  if (!main) return;
+  for (const child of main.children) {
+    if (!(child instanceof HTMLElement) || child === iframe) continue;
+    if (!child.hasAttribute(HIDDEN_ATTR)) {
+      child.setAttribute(HIDDEN_ATTR, 'true');
+      child.setAttribute(PREV_DISPLAY_ATTR, child.style.display || '');
+    }
+    child.style.display = 'none';
   }
+}
 
-  return [...document.querySelectorAll('a[href]')].filter((anchor) => {
-    const href = normalizeText(anchor.getAttribute('href'));
-    return href.includes('admin') || href.includes('machines') || href.includes('settings');
+function restoreMainContent() {
+  const hiddenNodes = document.querySelectorAll(`[${HIDDEN_ATTR}="true"]`);
+  hiddenNodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    node.style.display = node.getAttribute(PREV_DISPLAY_ATTR) || '';
+    node.removeAttribute(HIDDEN_ATTR);
+    node.removeAttribute(PREV_DISPLAY_ATTR);
   });
 }
 
-function findSettingsTab() {
-  return getNavLinks().find((anchor) => {
-    const href = normalizeText(anchor.getAttribute('href'));
-    const text = normalizeText(anchor.textContent);
-    return href.includes('/admin/settings') || href.includes('/settings') || text === 'settings';
-  }) || null;
+let navStealObserver = null;
+const stolenActive = new Set();
+
+function stealActiveFromNav() {
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+  nav.querySelectorAll('[aria-current="page"]').forEach(el => {
+    if (el.id === 'doctor-tab' || el.closest('#doctor-tab')) return;
+    el.removeAttribute('aria-current');
+    stolenActive.add(el);
+  });
 }
 
-function findTemplateTab() {
-  return getNavLinks().find((anchor) => {
-    const href = normalizeText(anchor.getAttribute('href'));
-    const text = normalizeText(anchor.textContent);
-    return href.includes('/admin/machines')
-      || href.includes('/machines')
-      || text === 'machines'
-      || text === 'devices';
-  }) || getNavLinks()[0] || null;
+// --- NUCLEAR FIX: REPAINT JOLT ---
+function triggerHeavyRepaint() {
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+  
+  // 1. Force a new Stacking Context/Compositor Layer
+  nav.style.willChange = 'transform, opacity, filter';
+  nav.style.filter = 'blur(0.01px)'; 
+  
+  requestAnimationFrame(() => {
+    // 2. Access offsetHeight to flush layout
+    void nav.offsetHeight;
+    
+    requestAnimationFrame(() => {
+      // 3. Revert and signal a window interaction
+      nav.style.filter = '';
+      nav.style.willChange = '';
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
 }
 
-function positionIframe(refEl) {
-  const nav = refEl.closest('nav')
-    || refEl.closest('[role="navigation"]')
-    || refEl.parentElement;
+function startNavStealing() {
+  injectGhostStyles();
+  stealActiveFromNav();
+  triggerHeavyRepaint();
 
-  if (!nav) {
-    iframe.style.top = '0';
-    iframe.style.height = '100vh';
-    return;
+  if (navStealObserver) navStealObserver.disconnect();
+  const nav = document.querySelector('nav') || document.querySelector('[role="navigation"]');
+  if (!nav) return;
+
+  navStealObserver = new MutationObserver(stealActiveFromNav);
+  navStealObserver.observe(nav, { 
+    attributes: true, 
+    attributeFilter: ['aria-current', 'class'], // Watch classes too in case of Tailwind overrides
+    childList: true, 
+    subtree: true 
+  });
+}
+
+function stopNavStealing() {
+  if (navStealObserver) { navStealObserver.disconnect(); navStealObserver = null; }
+  stolenActive.forEach(el => {
+    if (document.contains(el)) el.setAttribute('aria-current', 'page');
+  });
+  stolenActive.clear();
+  removeGhostStyles();
+  triggerHeavyRepaint();
+}
+
+function getTabContainer(a) {
+  if (!a) return null;
+  let el = a;
+  while (el.parentElement) {
+    if (el.parentElement.querySelectorAll('a[href*="/admin/"]').length > 1) return el;
+    el = el.parentElement;
+  }
+  return a;
+}
+
+function findSettingsContainer() {
+  const a = document.querySelector('a[href*="/admin/settings"]')
+    || [...document.querySelectorAll('a[href*="/admin/"]')]
+        .find(el => el.textContent.trim().toLowerCase() === 'settings');
+  return getTabContainer(a);
+}
+
+function findMachinesContainer() {
+  const a = document.querySelector('a[href*="/admin/machines"]')
+    || document.querySelectorAll('a[href*="/admin/"]')[0];
+  return getTabContainer(a);
+}
+
+function syncPanel() {
+  if (isOnDoctorPage()) {
+    const main = getMainContainer();
+    const bottom = getNavBottom();
+    const availableHeight = Math.max(window.innerHeight - bottom, 480);
+    const bg = getPageBg();
+
+    if (main && iframe.parentElement !== main) main.appendChild(iframe);
+    hideMainContent(main);
+
+    iframe.style.width = main ? '100%' : '100vw';
+    iframe.style.height = `${availableHeight}px`;
+    iframe.style.background = bg;
+    iframe.style.display = 'block';
+
+    if (!iframeLoaded) {
+      iframeLoaded = true;
+      iframe.src = chrome.runtime.getURL('index.html') + 
+                  '?embedded=true' + 
+                  '&apiBase=' + encodeURIComponent(API_BASE) + 
+                  '&bg=' + encodeURIComponent(bg);
+    }
+
+    const liveActive = document.querySelector('a[href*="/admin/"][aria-current="page"]:not(#doctor-tab):not(#doctor-tab *)');
+    const activeColor = liveActive ? getComputedStyle(liveActive).color : '#3b82f6';
+
+    startNavStealing();
+
+    const tab = document.getElementById('doctor-tab');
+    if (tab) {
+      const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
+      if (innerA) {
+        innerA.style.setProperty('color', activeColor, 'important');
+        innerA.querySelectorAll('*').forEach(el => el.style.setProperty('color', activeColor, 'important'));
+      }
+
+      let line = tab.querySelector('#doctor-underline');
+      if (!line) {
+        tab.style.position = 'relative';
+        line = document.createElement('div');
+        line.id = 'doctor-underline';
+        line.style.cssText = `
+          position: absolute; bottom: 0; left: 0; right: 0;
+          height: 2px; border-radius: 2px 2px 0 0;
+          pointer-events: none;
+        `;
+        tab.appendChild(line);
+      }
+      line.style.background = activeColor;
+    }
+
+  } else {
+    iframe.style.display = 'none';
+    restoreMainContent();
+    stopNavStealing();
+
+    const tab = document.getElementById('doctor-tab');
+    if (tab) {
+      const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
+      if (innerA) {
+        innerA.style.removeProperty('color');
+        innerA.querySelectorAll('*').forEach(el => el.style.removeProperty('color'));
+      }
+      const line = tab.querySelector('#doctor-underline');
+      if (line) line.remove();
+    }
+  }
+}
+
+// History API hooks
+history.pushState = (...args) => { nativePush(...args); syncPanel(); };
+history.replaceState = (...args) => { nativeReplace(...args); syncPanel(); };
+window.addEventListener('popstate', syncPanel);
+
+window.addEventListener('resize', () => {
+  if (!isOnDoctorPage()) return;
+  const main = getMainContainer();
+  if (main && iframe.parentElement !== main) main.appendChild(iframe);
+  hideMainContent(main);
+  const bottom = getNavBottom();
+  iframe.style.height = `${Math.max(window.innerHeight - bottom, 480)}px`;
+});
+
+function buildTab(templateContainer) {
+  const tab = templateContainer.cloneNode(true);
+  tab.id = 'doctor-tab';
+  tab.style.cursor = 'pointer';
+  tab.style.marginLeft = '1rem';
+  tab.removeAttribute('aria-current');
+  tab.querySelectorAll('[aria-current]').forEach(el => el.removeAttribute('aria-current'));
+
+  const innerA = tab.tagName === 'A' ? tab : tab.querySelector('a');
+  if (innerA) innerA.href = DOCTOR_PATH;
+
+  const svg = tab.querySelector('svg');
+  if (svg) {
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.innerHTML = `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`;
   }
 
-  const bottom = nav.getBoundingClientRect().bottom;
-  iframe.style.top = `${bottom}px`;
-  iframe.style.height = `calc(100vh - ${bottom}px)`;
-  iframe.style.background = getPageBg();
-}
-
-function setTabLabel(tab) {
   const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     if (walker.currentNode.textContent.trim()) {
-      walker.currentNode.textContent = TAB_LABEL;
-      return;
+      walker.currentNode.textContent = 'Doctor';
+      break;
     }
   }
-
-  const label = document.createElement('span');
-  label.textContent = TAB_LABEL;
-  tab.appendChild(label);
-}
-
-function buildTab(templateTab) {
-  const tab = templateTab.cloneNode(true);
-  tab.removeAttribute('href');
-  tab.removeAttribute('aria-current');
-  tab.id = TAB_ID;
-  tab.style.cursor = 'pointer';
-
-  const svgEl = tab.querySelector('svg');
-  if (svgEl) {
-    svgEl.setAttribute('viewBox', '0 0 24 24');
-    svgEl.setAttribute('width', '16');
-    svgEl.setAttribute('height', '16');
-    svgEl.innerHTML = `
-      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-      <line x1="8" y1="21" x2="16" y2="21"/>
-      <line x1="12" y1="17" x2="12" y2="21"/>
-    `;
-  }
-
-  setTabLabel(tab);
 
   tab.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    active = !active;
-
-    if (active) {
-      iframe.src = `${chrome.runtime.getURL('index.html')}?embedded=true&bg=${encodeURIComponent(getPageBg())}&apiBase=${encodeURIComponent(backendApiBase)}`;
-      positionIframe(tab);
-      iframe.style.display = 'block';
-      tab.setAttribute('aria-current', 'page');
-
-      const liveActive = document.querySelector('a[aria-current="page"]');
-      const activeColor = liveActive ? getComputedStyle(liveActive).color : '#60a5fa';
-      tab.style.setProperty('color', activeColor, 'important');
-      return;
-    }
-
-    iframe.style.display = 'none';
-    tab.removeAttribute('aria-current');
-    tab.style.removeProperty('color');
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!active || !(e.target instanceof Element)) {
-      return;
-    }
-
-    const clicked = e.target.closest('nav a[href], [role="navigation"] a[href]');
-    if (clicked && clicked.id !== TAB_ID) {
-      active = false;
-      iframe.style.display = 'none';
-      tab.removeAttribute('aria-current');
-      tab.style.removeProperty('color');
-    }
-  });
-
-  window.addEventListener('resize', () => {
-    if (active) {
-      positionIframe(tab);
-    }
-  });
+    nativePush({}, '', DOCTOR_PATH);
+    syncPanel();
+  }, true);
 
   return tab;
 }
 
 function ensureTab() {
-  const anchorTab = findSettingsTab() || findTemplateTab();
-  const templateTab = findTemplateTab();
-
-  if (!anchorTab || !templateTab) {
+  const settingsContainer = findSettingsContainer();
+  if (!settingsContainer) return;
+  const existing = document.getElementById('doctor-tab');
+  if (existing && settingsContainer.nextElementSibling === existing) return;
+  if (existing) {
+    settingsContainer.insertAdjacentElement('afterend', existing);
+    syncPanel();
     return;
   }
-
-  const existingTab = document.getElementById(TAB_ID);
-
-  if (existingTab) {
-    if (anchorTab.nextElementSibling !== existingTab) {
-      anchorTab.insertAdjacentElement('afterend', existingTab);
-    }
-    return;
-  }
-
-  const tab = buildTab(templateTab);
-  anchorTab.insertAdjacentElement('afterend', tab);
-  console.log('[ServerMonitor] tab injected');
+  const machinesContainer = findMachinesContainer();
+  if (!machinesContainer) return;
+  settingsContainer.insertAdjacentElement('afterend', buildTab(machinesContainer));
+  syncPanel();
 }
 
 ensureTab();
-const observer = new MutationObserver(ensureTab);
+
+let debounceTimer = null;
+const observer = new MutationObserver(() => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    ensureTab();
+    syncPanel();
+  }, 300);
+});
 observer.observe(document.body, { childList: true, subtree: true });

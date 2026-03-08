@@ -1,11 +1,14 @@
-import { HelpCircle, Grip, Server, AppWindow, Users, Navigation, ClipboardList, Globe, Settings, MapPin } from 'lucide-react';
-import { useState } from 'react';
+import { HelpCircle, Grip, Server, AppWindow, Users, Navigation, ClipboardList, Globe, Settings, MapPin, Activity } from 'lucide-react';
 
-const Header = () => {
-  const [activeTab, setActiveTab] = useState('Services');
+interface HeaderProps {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+}
 
+const Header = ({ activeTab, setActiveTab }: HeaderProps) => {
   const tabs = [
     { id: 'Services', icon: Server, label: 'Services' },
+    { id: 'Doctor', icon: Activity, label: 'Doctor' },
     { id: 'Apps', icon: AppWindow, label: 'Apps' },
     { id: 'Users', icon: Users, label: 'Users' },
     { id: 'Access controls', icon: Navigation, label: 'Access controls' },
